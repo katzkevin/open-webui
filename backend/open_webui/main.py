@@ -24,6 +24,9 @@ import anyio.to_thread
 import requests
 from redis import Redis
 
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
 
 from fastapi import (
     Depends,
@@ -93,6 +96,7 @@ from open_webui.routers import (
     users,
     utils,
     scim,
+    test_logging,
 )
 
 from open_webui.routers.retrieval import (
@@ -607,6 +611,36 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state, "redis_task_command_listener"):
         app.state.redis_task_command_listener.cancel()
 
+
+########################################
+#
+# SENTRY ERROR TRACKING
+#
+########################################
+
+SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+SENTRY_ENVIRONMENT = os.environ.get("SENTRY_ENVIRONMENT", ENV)
+SENTRY_TRACES_SAMPLE_RATE = float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "1.0"))
+
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=SENTRY_ENVIRONMENT,
+        traces_sample_rate=SENTRY_TRACES_SAMPLE_RATE,
+        integrations=[
+            StarletteIntegration(),
+            FastApiIntegration(),
+        ],
+        release=VERSION,
+    )
+    log.info(f"Sentry initialized for environment: {SENTRY_ENVIRONMENT}")
+
+
+########################################
+#
+# FASTAPI APP
+#
+########################################
 
 app = FastAPI(
     title="Open WebUI",
@@ -1316,6 +1350,7 @@ app.include_router(
     evaluations.router, prefix="/api/v1/evaluations", tags=["evaluations"]
 )
 app.include_router(utils.router, prefix="/api/v1/utils", tags=["utils"])
+app.include_router(test_logging.router, prefix="/api/v1/test", tags=["test"])
 
 # SCIM 2.0 API for identity management
 if SCIM_ENABLED:
