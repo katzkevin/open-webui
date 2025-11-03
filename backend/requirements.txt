@@ -35,6 +35,9 @@ RestrictedPython==8.0
 loguru==0.7.3
 asgiref==3.8.1
 
+# Error tracking
+sentry-sdk[fastapi]==2.19.2
+
 # AI libraries
 tiktoken
 mcp==1.14.1
