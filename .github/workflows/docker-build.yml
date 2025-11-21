@@ -1,0 +1,97 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - wolvia-main  # Main Wolvia branch - pushes to prod ECR
+      - wolvia-dev   # Dev Wolvia branch - pushes to dev ECR
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  AWS_REGION: us-east-2
+  # IMPORTANT: Update this when merging new upstream Open WebUI versions
+  UPSTREAM_VERSION: "0.6.36"
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC authentication to AWS
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history needed for version calculation
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::117433957365:role/cicd-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Determine version and environment
+        id: version
+        run: |
+          # Determine environment from branch
+          if [ "${{ github.ref }}" = "refs/heads/wolvia-main" ]; then
+            ENV="prod"
+          else
+            ENV="dev"
+          fi
+
+          # Count commits on this branch to generate incremental version
+          # This gives us 0.6.36-wolvia.1, 0.6.36-wolvia.2, etc.
+          COMMIT_COUNT=$(git rev-list --count HEAD)
+          VERSION="${{ env.UPSTREAM_VERSION }}-wolvia.${COMMIT_COUNT}"
+
+          # Also get git SHA for additional traceability
+          GIT_SHA=$(git rev-parse --short HEAD)
+
+          echo "environment=${ENV}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "git_sha=${GIT_SHA}" >> $GITHUB_OUTPUT
+
+          echo "📦 Building for environment: ${ENV}"
+          echo "📦 Version: ${VERSION}"
+          echo "📦 Git SHA: ${GIT_SHA}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push to ECR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/wolvia-${{ steps.version.outputs.environment }}-openwebui:${{ steps.version.outputs.version }}
+            ${{ steps.login-ecr.outputs.registry }}/wolvia-${{ steps.version.outputs.environment }}-openwebui:${{ steps.version.outputs.git_sha }}
+            ${{ steps.login-ecr.outputs.registry }}/wolvia-${{ steps.version.outputs.environment }}-openwebui:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/arm64  # Match your ECS architecture
+
+      - name: Output build summary
+        run: |
+          echo "## 🎉 Build Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ steps.version.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Git SHA:** \`${{ steps.version.outputs.git_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ECR Images Tagged:" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.version.outputs.git_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Update \`terraform/environments/${{ steps.version.outputs.environment }}/main.tf\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. Set \`openwebui_version = \"${{ steps.version.outputs.version }}\"\`" >> $GITHUB_STEP_SUMMARY
+          echo "3. Run \`./scripts/push-and-wait.sh\` to deploy" >> $GITHUB_STEP_SUMMARY

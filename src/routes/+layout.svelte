@@ -303,7 +303,10 @@
 
 					if ($isLastActiveTab) {
 						if ($settings?.notificationEnabled ?? false) {
-							new Notification(`${title} • Open WebUI`, {
+							// WOLVIA FORK: Removed "• Open WebUI" suffix from notification title
+							// Complies with BSD-3 Clause 5(i) (<50 users exemption)
+							// Original: new Notification(`${title} • Open WebUI`, {
+							new Notification(title, {
 								body: content,
 								icon: `${WEBUI_BASE_URL}/static/favicon.png`
 							});
@@ -452,7 +455,10 @@
 			if (type === 'message') {
 				if ($isLastActiveTab) {
 					if ($settings?.notificationEnabled ?? false) {
-						new Notification(`${data?.user?.name} (#${event?.channel?.name}) • Open WebUI`, {
+						// WOLVIA FORK: Removed "• Open WebUI" suffix from channel notification
+						// Complies with BSD-3 Clause 5(i) (<50 users exemption)
+						// Original: new Notification(`${data?.user?.name} (#${event?.channel?.name}) • Open WebUI`, {
+						new Notification(`${data?.user?.name} (#${event?.channel?.name})`, {
 							body: data?.content,
 							icon: data?.user?.profile_image_url ?? `${WEBUI_BASE_URL}/static/favicon.png`
 						});

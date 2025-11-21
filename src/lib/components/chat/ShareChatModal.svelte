@@ -27,6 +27,8 @@
 		return shareUrl;
 	};
 
+	// Community sharing disabled for Wolvia fork
+	/*
 	const shareChat = async () => {
 		const _chat = chat.chat;
 		console.log('share', _chat);
@@ -53,6 +55,7 @@
 			false
 		);
 	};
+	*/
 
 	export let show = false;
 
@@ -126,6 +129,7 @@
 				<div class="flex justify-end">
 					<div class="flex flex-col items-end space-x-1 mt-3">
 						<div class="flex gap-1">
+							<!-- Community sharing disabled for Wolvia fork
 							{#if $config?.features.enable_community_sharing}
 								<button
 									class="self-center flex items-center gap-1 px-3.5 py-2 text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-800 dark:bg-gray-850 dark:text-white dark:hover:bg-gray-800 transition rounded-full"
@@ -138,6 +142,7 @@
 									{$i18n.t('Share to Open WebUI Community')}
 								</button>
 							{/if}
+							-->
 
 							<button
 								class="self-center flex items-center gap-1 px-3.5 py-2 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"

@@ -202,7 +202,10 @@
 </script>
 
 <svelte:head>
-	<title>#{channel?.name ?? 'Channel'} • Open WebUI</title>
+	<!-- WOLVIA FORK: Removed "• Open WebUI" suffix from channel page title -->
+	<!-- Complies with BSD-3 Clause 5(i) (<50 users exemption) -->
+	<!-- Original: <title>#{channel?.name ?? 'Channel'} • Open WebUI</title> -->
+	<title>#{channel?.name ?? 'Channel'}</title>
 </svelte:head>
 
 <div
