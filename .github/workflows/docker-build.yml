@@ -45,9 +45,21 @@ jobs:
             ENV="dev"
           fi
 
-          # Count commits on this branch to generate incremental version
+          # Count commits since the upstream merge tag
           # This gives us 0.6.36-wolvia.1, 0.6.36-wolvia.2, etc.
-          COMMIT_COUNT=$(git rev-list --count HEAD)
+          # Only counts Wolvia-specific commits, not entire upstream history
+          UPSTREAM_TAG="v${{ env.UPSTREAM_VERSION }}"
+
+          # Check if upstream tag exists
+          if git rev-parse "$UPSTREAM_TAG" >/dev/null 2>&1; then
+            # Count commits since the upstream tag
+            COMMIT_COUNT=$(git rev-list --count ${UPSTREAM_TAG}..HEAD)
+          else
+            # Fallback: count all commits (shouldn't happen if UPSTREAM_VERSION is correct)
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+            echo "⚠️  Warning: Upstream tag $UPSTREAM_TAG not found, counting all commits"
+          fi
+
           VERSION="${{ env.UPSTREAM_VERSION }}-wolvia.${COMMIT_COUNT}"
 
           # Also get git SHA for additional traceability
