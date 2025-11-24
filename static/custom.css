@@ -1,0 +1,16 @@
+/**
+ * WOLVIA FORK: Custom UI modifications
+ * Hides specific buttons for cleaner interface
+ * Complies with BSD-3 Clause 5(i) - UI customization for <50 users
+ */
+
+/* Hide Temporary Chat button */
+#temporary-chat-button,
+#save-temporary-chat-button {
+  display: none !important;
+}
+
+/* Hide Controls button */
+button[aria-label="Controls"] {
+  display: none !important;
+}
