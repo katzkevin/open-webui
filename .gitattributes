@@ -38,7 +38,3 @@
 # Misc
 *.env text eol=lf
 *.lock text eol=lf
-static/static/*.png filter=lfs diff=lfs merge=lfs -text
-static/static/*.ico filter=lfs diff=lfs merge=lfs -text
-backend/open_webui/static/*.png filter=lfs diff=lfs merge=lfs -text
-backend/open_webui/static/*.ico filter=lfs diff=lfs merge=lfs -text
