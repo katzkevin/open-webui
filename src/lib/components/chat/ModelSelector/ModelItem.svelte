@@ -19,6 +19,31 @@
 
 	const i18n = getContext('i18n');
 
+	/**
+	 * Get the appropriate icon for a model based on its provider.
+	 * Returns custom icon if set, otherwise detects provider from model ID.
+	 */
+	function getModelIcon(model: any): string {
+		const customIcon = model?.info?.meta?.profile_image_url;
+		if (customIcon && customIcon !== '/static/favicon.png') {
+			return customIcon;
+		}
+
+		const modelId = model?.id?.toLowerCase() ?? '';
+
+		// Bedrock models (Amazon's model ID format)
+		if (/^(anthropic\.|amazon\.|meta\.|cohere\.|mistral\.|ai21\.|stability\.)/.test(modelId)) {
+			return `${WEBUI_BASE_URL}/static/bedrock.svg`;
+		}
+
+		// OpenAI models
+		if (/^(gpt-|o1-|o3-|chatgpt-|text-|dall-e-)/.test(modelId)) {
+			return `${WEBUI_BASE_URL}/static/openai.svg`;
+		}
+
+		return `${WEBUI_BASE_URL}/static/favicon.png`;
+	}
+
 	export let selectedModelIdx: number = -1;
 	export let item: any = {};
 	export let index: number = -1;
@@ -77,8 +102,7 @@
 			<div class="flex items-center min-w-fit">
 				<Tooltip content={$user?.role === 'admin' ? (item?.value ?? '') : ''} placement="top-start">
 					<img
-						src={item.model?.info?.meta?.profile_image_url ??
-							`${WEBUI_BASE_URL}/static/favicon.png`}
+						src={getModelIcon(item.model)}
 						alt="Model"
 						class="rounded-full size-5 flex items-center"
 					/>
