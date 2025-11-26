@@ -14,3 +14,10 @@
 button[aria-label="Controls"] {
   display: none !important;
 }
+
+/* Hide Workspace sidebar button */
+#sidebar-workspace-button,
+button[aria-label="Workspace"],
+a[href="/workspace"] {
+  display: none !important;
+}
