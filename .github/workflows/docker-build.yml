@@ -87,7 +87,10 @@ jobs:
             ${{ steps.login-ecr.outputs.registry }}/wolvia-${{ steps.version.outputs.environment }}-openwebui:${{ steps.version.outputs.version }}
             ${{ steps.login-ecr.outputs.registry }}/wolvia-${{ steps.version.outputs.environment }}-openwebui:${{ steps.version.outputs.git_sha }}
             ${{ steps.login-ecr.outputs.registry }}/wolvia-${{ steps.version.outputs.environment }}-openwebui:latest
-          cache-from: type=gha
+          # Use both GHA cache and ECR registry cache for faster builds
+          cache-from: |
+            type=gha
+            type=registry,ref=${{ steps.login-ecr.outputs.registry }}/wolvia-${{ steps.version.outputs.environment }}-openwebui:latest
           cache-to: type=gha,mode=max
           platforms: linux/amd64  # Match ECS X86_64 architecture
 
