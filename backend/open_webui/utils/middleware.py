@@ -6,6 +6,7 @@ import base64
 import textwrap
 
 import asyncio
+import aiohttp
 from aiocache import cached
 from typing import Any, Optional
 import random
@@ -116,6 +117,10 @@ from open_webui.env import (
     BYPASS_MODEL_ACCESS_CONTROL,
     ENABLE_REALTIME_CHAT_SAVE,
     ENABLE_QUERIES_CACHE,
+    WOLVIA_API_URL,
+    WOLVIA_API_KEY,
+    SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY,
 )
 from open_webui.constants import TASKS
 
@@ -551,6 +556,78 @@ async def chat_memory_handler(
     form_data["messages"] = add_or_update_system_message(
         f"User Context:\n{user_context}\n", form_data["messages"], append=True
     )
+
+    return form_data
+
+
+async def wolvia_memory_handler(
+    request: Request, form_data: dict, extra_params: dict, user
+) -> dict:
+    """
+    Fetches user memories from Wolvia's Supabase and injects into system message.
+    Only fetches on first message of a new conversation.
+
+    Currently fetches the 'persistent-memory' slug directly via Supabase REST API.
+    """
+    # CRASH if Supabase not configured - this is required
+    if not SUPABASE_URL:
+        raise ValueError("SUPABASE_URL is not configured")
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        raise ValueError("SUPABASE_SERVICE_ROLE_KEY is not configured")
+
+    # Detect new conversation (only 1 user message = first message)
+    messages = form_data.get("messages", [])
+    user_messages = [m for m in messages if m.get("role") == "user"]
+    if len(user_messages) != 1:
+        return form_data
+
+    # Fetch 'persistent-memory' from Supabase
+    memory_slug = "persistent-memory"
+    try:
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            # Supabase REST API: GET /rest/v1/memories?slug=eq.persistent-memory&select=text
+            async with session.get(
+                f"{SUPABASE_URL}/rest/v1/memories",
+                params={
+                    "slug": f"eq.{memory_slug}",
+                    "namespace": "eq.production",
+                    "select": "text,entity_name,slug",
+                },
+                headers={
+                    "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                    "Content-Type": "application/json",
+                },
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as response:
+                if response.status != 200:
+                    log.error(f"Supabase API returned status {response.status}")
+                    return form_data
+
+                data = await response.json()
+
+                if not data or len(data) == 0:
+                    log.error(f"Memory '{memory_slug}' not found in Supabase")
+                    return form_data
+
+                memory = data[0]
+                memory_text = memory.get("text", "")
+
+                if not memory_text:
+                    return form_data
+
+                # Inject memory into system message
+                wolvia_context = f"User Context from Wolvia:\n{memory_text}\n"
+                form_data["messages"] = add_or_update_system_message(
+                    wolvia_context, form_data["messages"], append=True
+                )
+
+                log.info(f"Injected Wolvia memory '{memory_slug}' into system prompt")
+
+    except asyncio.TimeoutError:
+        log.error("Supabase API timeout")
+    except Exception as e:
+        log.error(f"Wolvia memory fetch error: {e}")
 
     return form_data
 
@@ -1226,6 +1303,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         )
     except Exception as e:
         raise Exception(f"{e}")
+
+    # WOLVIA: Inject Wolvia memories on new conversations
+    form_data = await wolvia_memory_handler(request, form_data, extra_params, user)
 
     features = form_data.pop("features", None)
     if features:
