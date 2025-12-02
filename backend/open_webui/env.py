@@ -373,17 +373,6 @@ ENABLE_REALTIME_CHAT_SAVE = (
 ENABLE_QUERIES_CACHE = os.environ.get("ENABLE_QUERIES_CACHE", "False").lower() == "true"
 
 ####################################
-# WOLVIA
-####################################
-
-WOLVIA_API_URL = os.environ.get("WOLVIA_API_URL", "")
-WOLVIA_API_KEY = os.environ.get("WOLVIA_API_KEY", "")
-
-# Supabase for Wolvia memories (direct DB access)
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-
-####################################
 # REDIS
 ####################################
 
