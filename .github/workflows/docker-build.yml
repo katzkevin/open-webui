@@ -83,14 +83,18 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          # Push to both dev and prod ECR repos for easier testing
           tags: |
-            ${{ steps.login-ecr.outputs.registry }}/wolvia-${{ steps.version.outputs.environment }}-openwebui:${{ steps.version.outputs.version }}
-            ${{ steps.login-ecr.outputs.registry }}/wolvia-${{ steps.version.outputs.environment }}-openwebui:${{ steps.version.outputs.git_sha }}
-            ${{ steps.login-ecr.outputs.registry }}/wolvia-${{ steps.version.outputs.environment }}-openwebui:latest
+            ${{ steps.login-ecr.outputs.registry }}/wolvia-dev-openwebui:${{ steps.version.outputs.version }}
+            ${{ steps.login-ecr.outputs.registry }}/wolvia-dev-openwebui:${{ steps.version.outputs.git_sha }}
+            ${{ steps.login-ecr.outputs.registry }}/wolvia-dev-openwebui:latest
+            ${{ steps.login-ecr.outputs.registry }}/wolvia-prod-openwebui:${{ steps.version.outputs.version }}
+            ${{ steps.login-ecr.outputs.registry }}/wolvia-prod-openwebui:${{ steps.version.outputs.git_sha }}
+            ${{ steps.login-ecr.outputs.registry }}/wolvia-prod-openwebui:latest
           # Use both GHA cache and ECR registry cache for faster builds
           cache-from: |
             type=gha
-            type=registry,ref=${{ steps.login-ecr.outputs.registry }}/wolvia-${{ steps.version.outputs.environment }}-openwebui:latest
+            type=registry,ref=${{ steps.login-ecr.outputs.registry }}/wolvia-prod-openwebui:latest
           cache-to: type=gha,mode=max
           platforms: linux/amd64  # Match ECS X86_64 architecture
 
