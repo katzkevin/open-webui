@@ -490,6 +490,13 @@ from open_webui.utils.chat import (
 )
 from open_webui.utils.embeddings import generate_embeddings
 from open_webui.utils.middleware import process_chat_payload, process_chat_response
+from open_webui.utils.telemetry.chat_tracing import (
+    trace_chat_span,
+    add_chat_metadata_to_span,
+    get_current_span,
+    set_span_error,
+)
+from open_webui.utils.telemetry.constants import ChatSpanAttributes
 from open_webui.utils.access_control import has_access
 
 from open_webui.utils.auth import (
@@ -1507,186 +1514,213 @@ async def chat_completion(
     form_data: dict,
     user=Depends(get_verified_user),
 ):
-    if not request.app.state.MODELS:
-        await get_all_models(request, user=user)
-
     model_id = form_data.get("model", None)
-    model_item = form_data.pop("model_item", {})
-    tasks = form_data.pop("background_tasks", None)
 
-    metadata = {}
-    try:
-        if not model_item.get("direct", False):
-            if model_id not in request.app.state.MODELS:
-                raise Exception("Model not found")
+    async with trace_chat_span(
+        "chat.completion",
+        {
+            ChatSpanAttributes.USER_ID: user.id,
+            ChatSpanAttributes.MODEL_ID: model_id,
+            ChatSpanAttributes.IS_STREAMING: form_data.get("stream", False),
+        },
+    ) as root_span:
+        if not request.app.state.MODELS:
+            await get_all_models(request, user=user)
 
-            model = request.app.state.MODELS[model_id]
-            model_info = Models.get_model_by_id(model_id)
+        model_item = form_data.pop("model_item", {})
+        tasks = form_data.pop("background_tasks", None)
 
-            # Check if user has access to the model
-            if not BYPASS_MODEL_ACCESS_CONTROL and (
-                user.role != "admin" or not BYPASS_ADMIN_ACCESS_CONTROL
-            ):
-                try:
-                    check_model_access(user, model)
-                except Exception as e:
-                    raise e
-        else:
-            model = model_item
-            model_info = None
-
-            request.state.direct = True
-            request.state.model = model
-
-        model_info_params = (
-            model_info.params.model_dump() if model_info and model_info.params else {}
-        )
-
-        # Chat Params
-        stream_delta_chunk_size = form_data.get("params", {}).get(
-            "stream_delta_chunk_size"
-        )
-        reasoning_tags = form_data.get("params", {}).get("reasoning_tags")
-
-        # Model Params
-        if model_info_params.get("stream_delta_chunk_size"):
-            stream_delta_chunk_size = model_info_params.get("stream_delta_chunk_size")
-
-        if model_info_params.get("reasoning_tags") is not None:
-            reasoning_tags = model_info_params.get("reasoning_tags")
-
-        metadata = {
-            "user_id": user.id,
-            "chat_id": form_data.pop("chat_id", None),
-            "message_id": form_data.pop("id", None),
-            "session_id": form_data.pop("session_id", None),
-            "filter_ids": form_data.pop("filter_ids", []),
-            "tool_ids": form_data.get("tool_ids", None),
-            "tool_servers": form_data.pop("tool_servers", None),
-            "files": form_data.get("files", None),
-            "features": form_data.get("features", {}),
-            "variables": form_data.get("variables", {}),
-            "model": model,
-            "direct": model_item.get("direct", False),
-            "params": {
-                "stream_delta_chunk_size": stream_delta_chunk_size,
-                "reasoning_tags": reasoning_tags,
-                "function_calling": (
-                    "native"
-                    if (
-                        form_data.get("params", {}).get("function_calling") == "native"
-                        or model_info_params.get("function_calling") == "native"
-                    )
-                    else "default"
-                ),
-            },
-        }
-
-        if metadata.get("chat_id") and (user and user.role != "admin"):
-            if not metadata["chat_id"].startswith("local:"):
-                chat = Chats.get_chat_by_id_and_user_id(metadata["chat_id"], user.id)
-                if chat is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=ERROR_MESSAGES.DEFAULT(),
-                    )
-
-        request.state.metadata = metadata
-        form_data["metadata"] = metadata
-
-    except Exception as e:
-        log.debug(f"Error processing chat metadata: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
-
-    async def process_chat(request, form_data, user, metadata, model):
+        metadata = {}
         try:
-            form_data, metadata, events = await process_chat_payload(
-                request, form_data, user, metadata, model
-            )
+            async with trace_chat_span(
+                "chat.validation",
+                {ChatSpanAttributes.MODEL_ID: model_id},
+            ):
+                if not model_item.get("direct", False):
+                    if model_id not in request.app.state.MODELS:
+                        raise Exception("Model not found")
 
-            response = await chat_completion_handler(request, form_data, user)
-            if metadata.get("chat_id") and metadata.get("message_id"):
-                try:
-                    if not metadata["chat_id"].startswith("local:"):
-                        Chats.upsert_message_to_chat_by_id_and_message_id(
-                            metadata["chat_id"],
-                            metadata["message_id"],
-                            {
-                                "model": model_id,
-                            },
-                        )
-                except:
-                    pass
+                    model = request.app.state.MODELS[model_id]
+                    model_info = Models.get_model_by_id(model_id)
 
-            return await process_chat_response(
-                request, response, form_data, user, metadata, model, events, tasks
-            )
-        except asyncio.CancelledError:
-            log.info("Chat processing was cancelled")
-            try:
-                event_emitter = get_event_emitter(metadata)
-                await asyncio.shield(
-                    event_emitter(
-                        {"type": "chat:tasks:cancel"},
-                    )
+                    # Check if user has access to the model
+                    if not BYPASS_MODEL_ACCESS_CONTROL and (
+                        user.role != "admin" or not BYPASS_ADMIN_ACCESS_CONTROL
+                    ):
+                        try:
+                            check_model_access(user, model)
+                        except Exception as e:
+                            raise e
+                else:
+                    model = model_item
+                    model_info = None
+
+                    request.state.direct = True
+                    request.state.model = model
+
+                model_info_params = (
+                    model_info.params.model_dump() if model_info and model_info.params else {}
                 )
-            except Exception as e:
-                pass
-            finally:
-                raise  # re-raise to ensure proper task cancellation handling
-        except Exception as e:
-            log.debug(f"Error processing chat payload: {e}")
-            if metadata.get("chat_id") and metadata.get("message_id"):
-                # Update the chat message with the error
-                try:
+
+                # Chat Params
+                stream_delta_chunk_size = form_data.get("params", {}).get(
+                    "stream_delta_chunk_size"
+                )
+                reasoning_tags = form_data.get("params", {}).get("reasoning_tags")
+
+                # Model Params
+                if model_info_params.get("stream_delta_chunk_size"):
+                    stream_delta_chunk_size = model_info_params.get("stream_delta_chunk_size")
+
+                if model_info_params.get("reasoning_tags") is not None:
+                    reasoning_tags = model_info_params.get("reasoning_tags")
+
+                metadata = {
+                    "user_id": user.id,
+                    "chat_id": form_data.pop("chat_id", None),
+                    "message_id": form_data.pop("id", None),
+                    "session_id": form_data.pop("session_id", None),
+                    "filter_ids": form_data.pop("filter_ids", []),
+                    "tool_ids": form_data.get("tool_ids", None),
+                    "tool_servers": form_data.pop("tool_servers", None),
+                    "files": form_data.get("files", None),
+                    "features": form_data.get("features", {}),
+                    "variables": form_data.get("variables", {}),
+                    "model": model,
+                    "direct": model_item.get("direct", False),
+                    "params": {
+                        "stream_delta_chunk_size": stream_delta_chunk_size,
+                        "reasoning_tags": reasoning_tags,
+                        "function_calling": (
+                            "native"
+                            if (
+                                form_data.get("params", {}).get("function_calling") == "native"
+                                or model_info_params.get("function_calling") == "native"
+                            )
+                            else "default"
+                        ),
+                    },
+                }
+
+                if metadata.get("chat_id") and (user and user.role != "admin"):
                     if not metadata["chat_id"].startswith("local:"):
-                        Chats.upsert_message_to_chat_by_id_and_message_id(
-                            metadata["chat_id"],
-                            metadata["message_id"],
-                            {
-                                "error": {"content": str(e)},
-                            },
+                        chat = Chats.get_chat_by_id_and_user_id(metadata["chat_id"], user.id)
+                        if chat is None:
+                            raise HTTPException(
+                                status_code=status.HTTP_404_NOT_FOUND,
+                                detail=ERROR_MESSAGES.DEFAULT(),
+                            )
+
+                request.state.metadata = metadata
+                form_data["metadata"] = metadata
+
+                # Add metadata to root span after it's populated
+                if root_span:
+                    add_chat_metadata_to_span(root_span, metadata, model_id)
+
+        except Exception as e:
+            log.debug(f"Error processing chat metadata: {e}")
+            set_span_error(root_span, e)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e),
+            )
+
+        async def process_chat(request, form_data, user, metadata, model):
+            async with trace_chat_span(
+                "chat.process",
+                {
+                    ChatSpanAttributes.CHAT_ID: metadata.get("chat_id"),
+                    ChatSpanAttributes.MESSAGE_ID: metadata.get("message_id"),
+                    ChatSpanAttributes.MODEL_ID: model_id,
+                },
+            ) as process_span:
+                try:
+                    form_data, metadata, events = await process_chat_payload(
+                        request, form_data, user, metadata, model
+                    )
+
+                    response = await chat_completion_handler(request, form_data, user)
+                    if metadata.get("chat_id") and metadata.get("message_id"):
+                        try:
+                            if not metadata["chat_id"].startswith("local:"):
+                                Chats.upsert_message_to_chat_by_id_and_message_id(
+                                    metadata["chat_id"],
+                                    metadata["message_id"],
+                                    {
+                                        "model": model_id,
+                                    },
+                                )
+                        except:
+                            pass
+
+                    return await process_chat_response(
+                        request, response, form_data, user, metadata, model, events, tasks
+                    )
+                except asyncio.CancelledError:
+                    log.info("Chat processing was cancelled")
+                    try:
+                        event_emitter = get_event_emitter(metadata)
+                        await asyncio.shield(
+                            event_emitter(
+                                {"type": "chat:tasks:cancel"},
+                            )
                         )
+                    except Exception as e:
+                        pass
+                    finally:
+                        raise  # re-raise to ensure proper task cancellation handling
+                except Exception as e:
+                    log.debug(f"Error processing chat payload: {e}")
+                    set_span_error(process_span, e)
+                    if metadata.get("chat_id") and metadata.get("message_id"):
+                        # Update the chat message with the error
+                        try:
+                            if not metadata["chat_id"].startswith("local:"):
+                                Chats.upsert_message_to_chat_by_id_and_message_id(
+                                    metadata["chat_id"],
+                                    metadata["message_id"],
+                                    {
+                                        "error": {"content": str(e)},
+                                    },
+                                )
 
-                    event_emitter = get_event_emitter(metadata)
-                    await event_emitter(
-                        {
-                            "type": "chat:message:error",
-                            "data": {"error": {"content": str(e)}},
-                        }
-                    )
-                    await event_emitter(
-                        {"type": "chat:tasks:cancel"},
-                    )
+                            event_emitter = get_event_emitter(metadata)
+                            await event_emitter(
+                                {
+                                    "type": "chat:message:error",
+                                    "data": {"error": {"content": str(e)}},
+                                }
+                            )
+                            await event_emitter(
+                                {"type": "chat:tasks:cancel"},
+                            )
 
-                except:
-                    pass
-        finally:
-            try:
-                if mcp_clients := metadata.get("mcp_clients"):
-                    for client in reversed(mcp_clients.values()):
-                        await client.disconnect()
-            except Exception as e:
-                log.debug(f"Error cleaning up: {e}")
-                pass
+                        except:
+                            pass
+                finally:
+                    try:
+                        if mcp_clients := metadata.get("mcp_clients"):
+                            for client in reversed(mcp_clients.values()):
+                                await client.disconnect()
+                    except Exception as e:
+                        log.debug(f"Error cleaning up: {e}")
+                        pass
 
-    if (
-        metadata.get("session_id")
-        and metadata.get("chat_id")
-        and metadata.get("message_id")
-    ):
-        # Asynchronous Chat Processing
-        task_id, _ = await create_task(
-            request.app.state.redis,
-            process_chat(request, form_data, user, metadata, model),
-            id=metadata["chat_id"],
-        )
-        return {"status": True, "task_id": task_id}
-    else:
-        return await process_chat(request, form_data, user, metadata, model)
+        if (
+            metadata.get("session_id")
+            and metadata.get("chat_id")
+            and metadata.get("message_id")
+        ):
+            # Asynchronous Chat Processing
+            task_id, _ = await create_task(
+                request.app.state.redis,
+                process_chat(request, form_data, user, metadata, model),
+                id=metadata["chat_id"],
+            )
+            return {"status": True, "task_id": task_id}
+        else:
+            return await process_chat(request, form_data, user, metadata, model)
 
 
 # Alias for chat_completion (Legacy)

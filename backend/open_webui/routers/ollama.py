@@ -51,6 +51,12 @@ from open_webui.utils.payload import (
 )
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_access
+from open_webui.utils.telemetry.chat_tracing import (
+    trace_chat_span,
+    StreamingTTFTTracker,
+    get_current_span,
+)
+from open_webui.utils.telemetry.constants import ChatSpanAttributes
 
 
 from open_webui.config import (
@@ -180,8 +186,21 @@ async def send_post_request(
             if content_type:
                 response_headers["Content-Type"] = content_type
 
+            # Create TTFT tracker for streaming responses
+            current_span = get_current_span()
+            ttft_tracker = StreamingTTFTTracker()
+
+            async def tracked_stream():
+                """Wrap stream to track TTFT and total duration."""
+                try:
+                    async for chunk in r.content:
+                        ttft_tracker.on_chunk(chunk)
+                        yield chunk
+                finally:
+                    ttft_tracker.finalize(current_span)
+
             return StreamingResponse(
-                r.content,
+                tracked_stream(),
                 status_code=r.status,
                 headers=response_headers,
                 background=BackgroundTask(

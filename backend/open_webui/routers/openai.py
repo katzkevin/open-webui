@@ -49,6 +49,13 @@ from open_webui.utils.misc import (
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_access
+from open_webui.utils.telemetry.chat_tracing import (
+    trace_chat_span,
+    StreamingTTFTTracker,
+    get_current_span,
+)
+from open_webui.utils.telemetry.constants import ChatSpanAttributes
+from opentelemetry.trace import SpanKind
 
 
 log = logging.getLogger(__name__)
@@ -934,6 +941,9 @@ async def generate_chat_completion(
     streaming = False
     response = None
 
+    # Get current span for TTFT tracking
+    current_span = get_current_span()
+
     try:
         session = aiohttp.ClientSession(
             trust_env=True, timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
@@ -951,8 +961,21 @@ async def generate_chat_completion(
         # Check if response is SSE
         if "text/event-stream" in r.headers.get("Content-Type", ""):
             streaming = True
+
+            # Create TTFT tracker for streaming responses
+            ttft_tracker = StreamingTTFTTracker()
+
+            async def tracked_stream():
+                """Wrap stream to track TTFT and total duration."""
+                try:
+                    async for chunk in r.content:
+                        ttft_tracker.on_chunk(chunk)
+                        yield chunk
+                finally:
+                    ttft_tracker.finalize(current_span)
+
             return StreamingResponse(
-                r.content,
+                tracked_stream(),
                 status_code=r.status,
                 headers=dict(r.headers),
                 background=BackgroundTask(

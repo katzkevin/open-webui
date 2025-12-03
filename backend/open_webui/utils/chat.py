@@ -56,6 +56,8 @@ from open_webui.utils.filter import (
 )
 
 from open_webui.env import SRC_LOG_LEVELS, GLOBAL_LOG_LEVEL, BYPASS_MODEL_ACCESS_CONTROL
+from open_webui.utils.telemetry.chat_tracing import trace_chat_span, get_current_span
+from open_webui.utils.telemetry.constants import ChatSpanAttributes
 
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
@@ -257,34 +259,57 @@ async def generate_chat_completion(
 
         if model.get("pipe"):
             # Below does not require bypass_filter because this is the only route the uses this function and it is already bypassing the filter
-            return await generate_function_chat_completion(
-                request, form_data, user=user, models=models
-            )
+            async with trace_chat_span(
+                "chat.backend.function",
+                {
+                    ChatSpanAttributes.MODEL_ID: model_id,
+                    ChatSpanAttributes.MODEL_BACKEND: "function",
+                },
+            ):
+                return await generate_function_chat_completion(
+                    request, form_data, user=user, models=models
+                )
         if model.get("owned_by") == "ollama":
             # Using /ollama/api/chat endpoint
-            form_data = convert_payload_openai_to_ollama(form_data)
-            response = await generate_ollama_chat_completion(
-                request=request,
-                form_data=form_data,
-                user=user,
-                bypass_filter=bypass_filter,
-            )
-            if form_data.get("stream"):
-                response.headers["content-type"] = "text/event-stream"
-                return StreamingResponse(
-                    convert_streaming_response_ollama_to_openai(response),
-                    headers=dict(response.headers),
-                    background=response.background,
+            async with trace_chat_span(
+                "chat.backend.ollama",
+                {
+                    ChatSpanAttributes.MODEL_ID: model_id,
+                    ChatSpanAttributes.MODEL_BACKEND: "ollama",
+                    ChatSpanAttributes.IS_STREAMING: form_data.get("stream", False),
+                },
+            ):
+                form_data = convert_payload_openai_to_ollama(form_data)
+                response = await generate_ollama_chat_completion(
+                    request=request,
+                    form_data=form_data,
+                    user=user,
+                    bypass_filter=bypass_filter,
                 )
-            else:
-                return convert_response_ollama_to_openai(response)
+                if form_data.get("stream"):
+                    response.headers["content-type"] = "text/event-stream"
+                    return StreamingResponse(
+                        convert_streaming_response_ollama_to_openai(response),
+                        headers=dict(response.headers),
+                        background=response.background,
+                    )
+                else:
+                    return convert_response_ollama_to_openai(response)
         else:
-            return await generate_openai_chat_completion(
-                request=request,
-                form_data=form_data,
-                user=user,
-                bypass_filter=bypass_filter,
-            )
+            async with trace_chat_span(
+                "chat.backend.openai",
+                {
+                    ChatSpanAttributes.MODEL_ID: model_id,
+                    ChatSpanAttributes.MODEL_BACKEND: "openai",
+                    ChatSpanAttributes.IS_STREAMING: form_data.get("stream", False),
+                },
+            ):
+                return await generate_openai_chat_completion(
+                    request=request,
+                    form_data=form_data,
+                    user=user,
+                    bypass_filter=bypass_filter,
+                )
 
 
 chat_completion = generate_chat_completion

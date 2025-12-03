@@ -100,6 +100,12 @@ from open_webui.utils.filter import (
 from open_webui.utils.code_interpreter import execute_code_jupyter
 from open_webui.utils.payload import apply_system_prompt_to_body
 from open_webui.utils.mcp.client import MCPClient
+from open_webui.utils.telemetry.chat_tracing import (
+    trace_chat_span,
+    StreamingTTFTTracker,
+    get_current_span,
+)
+from open_webui.utils.telemetry.constants import ChatSpanAttributes
 
 
 from open_webui.config import (
@@ -1202,47 +1208,64 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     variables = form_data.pop("variables", None)
 
     # Process the form_data through the pipeline
-    try:
-        form_data = await process_pipeline_inlet_filter(
-            request, form_data, user, models
-        )
-    except Exception as e:
-        raise e
-
-    try:
-        filter_functions = [
-            Functions.get_function_by_id(filter_id)
-            for filter_id in get_sorted_filter_ids(
-                request, model, metadata.get("filter_ids", [])
+    async with trace_chat_span(
+        "chat.filter.inlet.pipeline",
+        {ChatSpanAttributes.MODEL_ID: form_data.get("model")},
+    ):
+        try:
+            form_data = await process_pipeline_inlet_filter(
+                request, form_data, user, models
             )
-        ]
+        except Exception as e:
+            raise e
 
-        form_data, flags = await process_filter_functions(
-            request=request,
-            filter_functions=filter_functions,
-            filter_type="inlet",
-            form_data=form_data,
-            extra_params=extra_params,
-        )
-    except Exception as e:
-        raise Exception(f"{e}")
+    async with trace_chat_span(
+        "chat.filter.inlet.function",
+        {ChatSpanAttributes.MODEL_ID: form_data.get("model")},
+    ):
+        try:
+            filter_functions = [
+                Functions.get_function_by_id(filter_id)
+                for filter_id in get_sorted_filter_ids(
+                    request, model, metadata.get("filter_ids", [])
+                )
+            ]
+
+            form_data, flags = await process_filter_functions(
+                request=request,
+                filter_functions=filter_functions,
+                filter_type="inlet",
+                form_data=form_data,
+                extra_params=extra_params,
+            )
+        except Exception as e:
+            raise Exception(f"{e}")
 
     features = form_data.pop("features", None)
     if features:
         if "memory" in features and features["memory"]:
-            form_data = await chat_memory_handler(
-                request, form_data, extra_params, user
-            )
+            async with trace_chat_span(
+                "chat.memory",
+                {ChatSpanAttributes.HAS_MEMORY: True},
+            ):
+                form_data = await chat_memory_handler(
+                    request, form_data, extra_params, user
+                )
 
         if "web_search" in features and features["web_search"]:
-            form_data = await chat_web_search_handler(
-                request, form_data, extra_params, user
-            )
+            async with trace_chat_span(
+                "chat.web_search",
+                {ChatSpanAttributes.HAS_WEB_SEARCH: True},
+            ):
+                form_data = await chat_web_search_handler(
+                    request, form_data, extra_params, user
+                )
 
         if "image_generation" in features and features["image_generation"]:
-            form_data = await chat_image_generation_handler(
-                request, form_data, extra_params, user
-            )
+            async with trace_chat_span("chat.image_generation"):
+                form_data = await chat_image_generation_handler(
+                    request, form_data, extra_params, user
+                )
 
         if "code_interpreter" in features and features["code_interpreter"]:
             form_data["messages"] = add_or_update_user_message(
@@ -1435,30 +1458,38 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         metadata["mcp_clients"] = mcp_clients
 
     if tools_dict:
-        if metadata.get("params", {}).get("function_calling") == "native":
-            # If the function calling is native, then call the tools function calling handler
-            metadata["tools"] = tools_dict
-            form_data["tools"] = [
-                {"type": "function", "function": tool.get("spec", {})}
-                for tool in tools_dict.values()
-            ]
-        else:
-            # If the function calling is not native, then call the tools function calling handler
-            try:
-                form_data, flags = await chat_completion_tools_handler(
-                    request, form_data, extra_params, user, models, tools_dict
-                )
-                sources.extend(flags.get("sources", []))
-            except Exception as e:
-                log.exception(e)
+        async with trace_chat_span(
+            "chat.tools.setup",
+            {ChatSpanAttributes.HAS_TOOLS: True},
+        ):
+            if metadata.get("params", {}).get("function_calling") == "native":
+                # If the function calling is native, then call the tools function calling handler
+                metadata["tools"] = tools_dict
+                form_data["tools"] = [
+                    {"type": "function", "function": tool.get("spec", {})}
+                    for tool in tools_dict.values()
+                ]
+            else:
+                # If the function calling is not native, then call the tools function calling handler
+                try:
+                    form_data, flags = await chat_completion_tools_handler(
+                        request, form_data, extra_params, user, models, tools_dict
+                    )
+                    sources.extend(flags.get("sources", []))
+                except Exception as e:
+                    log.exception(e)
 
-    try:
-        form_data, flags = await chat_completion_files_handler(
-            request, form_data, extra_params, user
-        )
-        sources.extend(flags.get("sources", []))
-    except Exception as e:
-        log.exception(e)
+    async with trace_chat_span(
+        "chat.files",
+        {ChatSpanAttributes.HAS_RAG: bool(files)},
+    ):
+        try:
+            form_data, flags = await chat_completion_files_handler(
+                request, form_data, extra_params, user
+            )
+            sources.extend(flags.get("sources", []))
+        except Exception as e:
+            log.exception(e)
 
     # If context is not empty, insert it into the messages
     if len(sources) > 0:
@@ -2770,6 +2801,9 @@ async def process_chat_response(
                             "name", ""
                         )
                         tool_args = tool_call.get("function", {}).get("arguments", "{}")
+
+                        # Note: Tool execution tracing happens at the tool level
+                        # The parent span context is propagated automatically
 
                         tool_function_params = {}
                         try:
