@@ -10,7 +10,7 @@ on:
 env:
   AWS_REGION: us-east-2
   # IMPORTANT: Update this when merging new upstream Open WebUI versions
-  UPSTREAM_VERSION: "0.6.36"
+  UPSTREAM_VERSION: "0.6.41"
 
 jobs:
   build-and-push:
@@ -115,3 +115,11 @@ jobs:
           echo "1. Update \`terraform/environments/${{ steps.version.outputs.environment }}/main.tf\`" >> $GITHUB_STEP_SUMMARY
           echo "2. Set \`openwebui_version = \"${{ steps.version.outputs.version }}\"\`" >> $GITHUB_STEP_SUMMARY
           echo "3. Run \`./scripts/push-and-wait.sh\` to deploy" >> $GITHUB_STEP_SUMMARY
+
+      - name: Print version
+        run: |
+          echo ""
+          echo "========================================"
+          echo "VERSION: ${{ steps.version.outputs.version }}"
+          echo "========================================"
+          echo ""
