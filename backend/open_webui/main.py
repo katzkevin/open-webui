@@ -1569,6 +1569,9 @@ async def chat_completion(
                 reasoning_tags = form_data.get("params", {}).get("reasoning_tags")
 
                 # Model Params
+                if model_info_params.get("stream_response") is not None:
+                    form_data["stream"] = model_info_params.get("stream_response")
+
                 if model_info_params.get("stream_delta_chunk_size"):
                     stream_delta_chunk_size = model_info_params.get("stream_delta_chunk_size")
 
@@ -1579,6 +1582,7 @@ async def chat_completion(
                     "user_id": user.id,
                     "chat_id": form_data.pop("chat_id", None),
                     "message_id": form_data.pop("id", None),
+                    "parent_message_id": form_data.pop("parent_id", None),
                     "session_id": form_data.pop("session_id", None),
                     "filter_ids": form_data.pop("filter_ids", []),
                     "tool_ids": form_data.get("tool_ids", None),
@@ -1648,6 +1652,7 @@ async def chat_completion(
                                     metadata["chat_id"],
                                     metadata["message_id"],
                                     {
+                                        "parentId": metadata.get("parent_message_id", None),
                                         "model": model_id,
                                     },
                                 )
@@ -1681,6 +1686,7 @@ async def chat_completion(
                                     metadata["chat_id"],
                                     metadata["message_id"],
                                     {
+                                        "parentId": metadata.get("parent_message_id", None),
                                         "error": {"content": str(e)},
                                     },
                                 )
