@@ -31,6 +31,10 @@ from open_webui.routers.ollama import (
     generate_chat_completion as generate_ollama_chat_completion,
 )
 
+from open_webui.routers.bedrock import (
+    generate_chat_completion as generate_bedrock_chat_completion,
+)
+
 from open_webui.routers.pipelines import (
     process_pipeline_inlet_filter,
     process_pipeline_outlet_filter,
@@ -295,6 +299,22 @@ async def generate_chat_completion(
                     )
                 else:
                     return convert_response_ollama_to_openai(response)
+        elif model.get("owned_by") == "bedrock":
+            # Using native Bedrock router
+            async with trace_chat_span(
+                "chat.backend.bedrock",
+                {
+                    ChatSpanAttributes.MODEL_ID: model_id,
+                    ChatSpanAttributes.MODEL_BACKEND: "bedrock",
+                    ChatSpanAttributes.IS_STREAMING: form_data.get("stream", False),
+                },
+            ):
+                return await generate_bedrock_chat_completion(
+                    request=request,
+                    form_data=form_data,
+                    user=user,
+                    bypass_filter=bypass_filter,
+                )
         else:
             async with trace_chat_span(
                 "chat.backend.openai",
