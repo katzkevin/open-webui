@@ -1085,6 +1085,23 @@ OPENAI_API_BASE_URL = "https://api.openai.com/v1"
 
 
 ####################################
+# BEDROCK_API
+####################################
+
+ENABLE_BEDROCK_API = PersistentConfig(
+    "ENABLE_BEDROCK_API",
+    "bedrock.enable",
+    os.environ.get("ENABLE_BEDROCK_API", "False").lower() == "true",
+)
+
+BEDROCK_REGION = PersistentConfig(
+    "BEDROCK_REGION",
+    "bedrock.region",
+    os.environ.get("BEDROCK_REGION", os.environ.get("AWS_REGION", "us-east-1")),
+)
+
+
+####################################
 # MODELS
 ####################################
 
