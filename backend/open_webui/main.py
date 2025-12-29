@@ -1322,7 +1322,9 @@ class APIKeyRestrictionMiddleware(BaseHTTPMiddleware):
         token = None
 
         if auth_header:
-            scheme, token = auth_header.split(" ")
+            parts = auth_header.split(" ", 1)  # maxsplit=1 handles tokens with spaces
+            if len(parts) == 2:
+                scheme, token = parts
 
         # Only apply restrictions if an sk- API key is used
         if token and token.startswith("sk-"):
