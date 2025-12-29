@@ -12,6 +12,8 @@ from open_webui.models.models import (
     ModelResponse,
     ModelListResponse,
     Models,
+    BulkConfigureRequest,
+    BulkConfigureResponse,
 )
 
 from pydantic import BaseModel
@@ -415,3 +417,33 @@ async def delete_model_by_id(form_data: ModelIdForm, user=Depends(get_verified_u
 async def delete_all_models(user=Depends(get_admin_user)):
     result = Models.delete_all_models()
     return result
+
+
+############################
+# BulkConfigureModels
+############################
+
+
+@router.post("/bulk-configure", response_model=BulkConfigureResponse)
+async def bulk_configure_models(
+    form_data: BulkConfigureRequest,
+    user=Depends(get_admin_user),
+):
+    """
+    Bulk configure per-model settings (tools, system message, is_active).
+
+    This endpoint allows setting toolIds, defaultFeatureIds, system_message,
+    and is_active status for multiple models in a single atomic operation.
+
+    Options:
+    - delete_unlisted: If true, delete model entries not in the request
+    - create_if_missing: If true, create model entries for models that don't exist
+
+    Complements the bulk config import which handles connections, task settings,
+    MCP server definitions, etc.
+    """
+    return Models.bulk_configure(
+        user_id=user.id,
+        configs=form_data.models,
+        options=form_data.options,
+    )

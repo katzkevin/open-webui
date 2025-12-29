@@ -456,5 +456,200 @@ class ModelsTable:
             log.exception(f"Error syncing models for user {user_id}: {e}")
             return []
 
+    def bulk_configure(
+        self,
+        user_id: str,
+        configs: list["BulkConfigureModelConfig"],
+        options: Optional["BulkConfigureOptions"] = None,
+    ) -> "BulkConfigureResponse":
+        """
+        Bulk configure per-model settings (tools, system message, is_active).
+
+        Args:
+            user_id: The admin user ID performing the operation
+            configs: List of model configurations to apply
+            options: Options for the operation (delete_unlisted, create_if_missing)
+
+        Returns:
+            BulkConfigureResponse with summary and details
+        """
+        if options is None:
+            options = BulkConfigureOptions()
+
+        summary = BulkConfigureSummary()
+        details: list[BulkConfigureDetail] = []
+        config_ids = {config.id for config in configs}
+
+        try:
+            with get_db() as db:
+                # Get existing models
+                existing_models = {model.id: model for model in db.query(Model).all()}
+
+                # Process each config
+                for config in configs:
+                    try:
+                        existing = existing_models.get(config.id)
+
+                        if existing:
+                            # Update existing model
+                            meta = existing.meta or {}
+                            if isinstance(meta, str):
+                                import json
+
+                                meta = json.loads(meta)
+
+                            # Update meta fields if provided
+                            if config.toolIds is not None:
+                                meta["toolIds"] = config.toolIds
+                            if config.defaultFeatureIds is not None:
+                                meta["defaultFeatureIds"] = config.defaultFeatureIds
+                            if config.system_message is not None:
+                                meta["suggestion_prompts"] = config.system_message
+                            elif config.system_message == "":
+                                # Explicit empty string clears the system message
+                                meta.pop("suggestion_prompts", None)
+
+                            update_data = {"meta": meta, "updated_at": int(time.time())}
+
+                            if config.is_active is not None:
+                                update_data["is_active"] = config.is_active
+
+                            db.query(Model).filter_by(id=config.id).update(update_data)
+
+                            summary.updated += 1
+                            details.append(
+                                BulkConfigureDetail(id=config.id, action="updated")
+                            )
+
+                        elif options.create_if_missing:
+                            # Create new model entry
+                            meta = {}
+                            if config.toolIds is not None:
+                                meta["toolIds"] = config.toolIds
+                            if config.defaultFeatureIds is not None:
+                                meta["defaultFeatureIds"] = config.defaultFeatureIds
+                            if config.system_message is not None:
+                                meta["suggestion_prompts"] = config.system_message
+
+                            new_model = Model(
+                                id=config.id,
+                                user_id=user_id,
+                                base_model_id=config.id,  # Base model is itself
+                                name=config.id,  # Use ID as name initially
+                                meta=meta,
+                                params={},
+                                is_active=config.is_active if config.is_active is not None else True,
+                                created_at=int(time.time()),
+                                updated_at=int(time.time()),
+                            )
+                            db.add(new_model)
+
+                            summary.created += 1
+                            details.append(
+                                BulkConfigureDetail(id=config.id, action="created")
+                            )
+
+                        else:
+                            # Skip - model doesn't exist and create_if_missing is False
+                            summary.skipped += 1
+                            details.append(
+                                BulkConfigureDetail(
+                                    id=config.id,
+                                    action="skipped",
+                                    error="Model not found and create_if_missing=false",
+                                )
+                            )
+
+                    except Exception as e:
+                        log.exception(f"Error processing model {config.id}: {e}")
+                        summary.skipped += 1
+                        details.append(
+                            BulkConfigureDetail(
+                                id=config.id, action="skipped", error=str(e)
+                            )
+                        )
+
+                # Delete unlisted models if requested
+                if options.delete_unlisted:
+                    for model_id, model in existing_models.items():
+                        if model_id not in config_ids:
+                            db.delete(model)
+                            summary.deleted += 1
+                            details.append(
+                                BulkConfigureDetail(id=model_id, action="deleted")
+                            )
+
+                db.commit()
+
+                return BulkConfigureResponse(
+                    success=True, summary=summary, details=details
+                )
+
+        except Exception as e:
+            log.exception(f"Error in bulk_configure: {e}")
+            return BulkConfigureResponse(
+                success=False,
+                summary=summary,
+                details=[
+                    BulkConfigureDetail(
+                        id="__error__", action="skipped", error=str(e)
+                    )
+                ],
+            )
+
+
+####################
+# Bulk Configure Types
+####################
+
+
+class BulkConfigureModelConfig(BaseModel):
+    """Configuration for a single model in bulk configure"""
+
+    id: str
+    toolIds: Optional[list[str]] = None
+    defaultFeatureIds: Optional[list[str]] = None
+    system_message: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class BulkConfigureOptions(BaseModel):
+    """Options for bulk configure operation"""
+
+    delete_unlisted: bool = False
+    create_if_missing: bool = True
+
+
+class BulkConfigureRequest(BaseModel):
+    """Request body for bulk configure endpoint"""
+
+    models: list[BulkConfigureModelConfig]
+    options: Optional[BulkConfigureOptions] = None
+
+
+class BulkConfigureDetail(BaseModel):
+    """Detail for a single model in bulk configure response"""
+
+    id: str
+    action: str  # "created", "updated", "deleted", "skipped"
+    error: Optional[str] = None
+
+
+class BulkConfigureSummary(BaseModel):
+    """Summary of bulk configure operation"""
+
+    created: int = 0
+    updated: int = 0
+    deleted: int = 0
+    skipped: int = 0
+
+
+class BulkConfigureResponse(BaseModel):
+    """Response body for bulk configure endpoint"""
+
+    success: bool
+    summary: BulkConfigureSummary
+    details: list[BulkConfigureDetail]
+
 
 Models = ModelsTable()
