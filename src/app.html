@@ -90,7 +90,7 @@
 				logo.id = 'logo';
 				logo.style =
 					'position: absolute; width: auto; height: 6rem; top: 44%; left: 50%; transform: translateX(-50%); display:block;' +
-					(isDarkMode ? ' filter: grayscale(1) invert(1);' : '');
+					(isDarkMode ? ' filter: invert(1);' : '');
 				logo.src = '/static/splash.png';
 
 				document.addEventListener('DOMContentLoaded', function () {
@@ -121,7 +121,7 @@
 					overflow-y: scroll !important;
 				}
 				html.dark #logo-her {
-					filter: grayscale(1) invert(1);
+					filter: invert(1);
 				}
 			</style>
 
