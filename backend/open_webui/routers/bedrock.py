@@ -36,6 +36,41 @@ router = APIRouter()
 
 
 ####################################
+# Model Aliasing
+####################################
+
+# Maps deprecated/old model IDs to current model IDs.
+# This allows old conversations to continue working after model updates.
+MODEL_ALIASES = {
+    # Old Opus versions -> Opus 4.5 (global)
+    "global.anthropic.claude-opus-4-20250514-v1:0": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+    "global.anthropic.claude-opus-4-1-20250805-v1:0": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+    # Old Opus versions -> Opus 4.5 (us)
+    "us.anthropic.claude-opus-4-20250514-v1:0": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+    "us.anthropic.claude-opus-4-1-20250805-v1:0": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+    # Old Sonnet versions -> Sonnet 4.5 (global)
+    "global.anthropic.claude-sonnet-4-20250514-v1:0": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    # Old Sonnet versions -> Sonnet 4.5 (us)
+    "us.anthropic.claude-sonnet-4-20250514-v1:0": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "us.anthropic.claude-3-5-sonnet-20241022-v2:0": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "us.anthropic.claude-3-5-sonnet-20240620-v1:0": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+}
+
+
+def resolve_model_alias(model_id: str) -> str:
+    """
+    Resolve model aliases to canonical model IDs.
+
+    If the model_id is in the alias map, returns the canonical model ID.
+    Otherwise returns the original model_id unchanged.
+    """
+    resolved = MODEL_ALIASES.get(model_id, model_id)
+    if resolved != model_id:
+        log.info(f"Resolved model alias: {model_id} -> {resolved}")
+    return resolved
+
+
+####################################
 # Boto3 Client Configuration
 ####################################
 
@@ -772,10 +807,18 @@ async def generate_chat_completion(
     payload = {**form_data}
     metadata = payload.pop("metadata", None)
 
-    model_id = payload.get("model")
+    # Resolve model aliases (old model IDs -> current model IDs)
+    original_model_id = payload.get("model")
+    model_id = resolve_model_alias(original_model_id)
+    if model_id != original_model_id:
+        payload["model"] = model_id  # Update payload with resolved model
+
     model_info = Models.get_model_by_id(model_id)
 
     # Check access control
+    # If model was aliased, we trust the alias mapping and allow access
+    was_aliased = (model_id != original_model_id)
+
     if model_info:
         if model_info.base_model_id:
             payload["model"] = model_info.base_model_id
@@ -787,7 +830,8 @@ async def generate_chat_completion(
                 or has_access(user.id, type="read", access_control=model_info.access_control)
             ):
                 raise HTTPException(status_code=403, detail="Model not found")
-    elif not bypass_filter and user.role != "admin":
+    elif not bypass_filter and user.role != "admin" and not was_aliased:
+        # Allow aliased models even if not in DB (the alias mapping is the authorization)
         raise HTTPException(status_code=403, detail="Model not found")
 
     region = request.app.state.config.BEDROCK_REGION
