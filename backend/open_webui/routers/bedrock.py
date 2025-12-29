@@ -202,7 +202,6 @@ class BedrockChatModel:
                             profile_metadata[profile_id] = {
                                 "underlying_model_id": model_id,
                                 "profile_type": "SYSTEM_DEFINED",
-                                "profile_name": profile.get("inferenceProfileName", profile_id),
                             }
         except Exception as e:
             log.warning(f"Failed to list inference profiles: {e}")
@@ -216,7 +215,6 @@ class BedrockChatModel:
         for profile_id, metadata in profile_metadata.items():
             models.append({
                 "id": profile_id,
-                "name": metadata.get("profile_name", profile_id),
                 "object": "model",
                 "created": int(time.time()),
                 "owned_by": "bedrock",
