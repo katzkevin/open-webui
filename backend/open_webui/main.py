@@ -72,7 +72,6 @@ from open_webui.socket.main import (
 )
 from open_webui.routers import (
     audio,
-    bedrock,
     images,
     ollama,
     openai,
@@ -124,9 +123,6 @@ from open_webui.config import (
     OPENAI_API_BASE_URLS,
     OPENAI_API_KEYS,
     OPENAI_API_CONFIGS,
-    # Bedrock
-    ENABLE_BEDROCK_API,
-    BEDROCK_REGION,
     # Direct Connections
     ENABLE_DIRECT_CONNECTIONS,
     # Model list
@@ -730,17 +726,6 @@ app.state.config.OPENAI_API_KEYS = OPENAI_API_KEYS
 app.state.config.OPENAI_API_CONFIGS = OPENAI_API_CONFIGS
 
 app.state.OPENAI_MODELS = {}
-
-########################################
-#
-# BEDROCK
-#
-########################################
-
-app.state.config.ENABLE_BEDROCK_API = ENABLE_BEDROCK_API
-app.state.config.BEDROCK_REGION = BEDROCK_REGION
-
-app.state.BEDROCK_MODELS = {}
 
 ########################################
 #
@@ -1415,7 +1400,6 @@ app.mount("/ws", socket_app)
 
 app.include_router(ollama.router, prefix="/ollama", tags=["ollama"])
 app.include_router(openai.router, prefix="/openai", tags=["openai"])
-app.include_router(bedrock.router, prefix="/bedrock", tags=["bedrock"])
 
 
 app.include_router(pipelines.router, prefix="/api/v1/pipelines", tags=["pipelines"])
