@@ -62,7 +62,7 @@ class TestModels(AbstractPostgresTest):
         assert len(response.json()) == 0
 
     def test_bulk_configure_create_models(self):
-        """Test bulk-configure creates new model entries"""
+        """Test bulk-configure creates new model entries with correct field names"""
         with mock_webui_user(id="admin", role="admin"):
             response = self.fast_api_client.post(
                 self.create_url("/bulk-configure"),
@@ -94,6 +94,18 @@ class TestModels(AbstractPostgresTest):
         assert data["summary"]["created"] == 2
         assert data["summary"]["updated"] == 0
         assert data["summary"]["deleted"] == 0
+
+        # Verify the stored field names are snake_case (tool_ids, not toolIds)
+        with mock_webui_user(id="admin", role="admin"):
+            response = self.fast_api_client.get(
+                self.create_url("/model"),
+                params={"id": "test-model-1"},
+            )
+        assert response.status_code == 200
+        model_data = response.json()
+        # Backend uses snake_case field names
+        assert model_data["meta"]["tool_ids"] == ["tool-a", "tool-b"]
+        assert model_data["meta"]["default_feature_ids"] == ["tool-a"]
 
     def test_bulk_configure_update_models(self):
         """Test bulk-configure updates existing model entries"""
