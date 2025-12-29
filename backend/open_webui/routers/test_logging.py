@@ -3,8 +3,10 @@ Test endpoint for validating Datadog and Sentry integration.
 This endpoint should only be available in dev environments.
 """
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+import sentry_sdk
+from fastapi import APIRouter, Depends, HTTPException, Query
 from open_webui.utils.auth import get_admin_user
 
 log = logging.getLogger(__name__)
@@ -35,3 +37,33 @@ async def test_logging(user=Depends(get_admin_user)):
         status_code=500,
         detail="Test exception from test-logging endpoint - this is intentional for testing Datadog and Sentry integration"
     )
+
+
+class SentryTestError(Exception):
+    """Custom exception for Sentry testing that bypasses FastAPI's HTTPException handling."""
+    pass
+
+
+@router.get("/test-sentry")
+async def test_sentry(testId: Optional[str] = Query(None, description="Test ID for tracking in Sentry")):
+    """
+    Test endpoint for Sentry integration verification.
+
+    Used by scripts/sentry_verify.py to confirm errors reach Sentry.
+    Captures a test error with the provided testId for easy lookup.
+
+    No authentication required for easy automated testing.
+    """
+    test_id = testId or "no-test-id"
+
+    # Log the test attempt
+    log.info(f"Sentry test triggered with testId: {test_id}")
+
+    # Capture the error in Sentry manually (guaranteed to be captured)
+    try:
+        raise SentryTestError(f"Sentry test error - testId: {test_id}")
+    except SentryTestError as e:
+        sentry_sdk.capture_exception(e)
+        log.error(f"Sentry test error captured - testId: {test_id}")
+
+    return {"status": "error_captured", "testId": test_id, "message": "Test error sent to Sentry"}

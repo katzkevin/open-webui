@@ -1441,6 +1441,8 @@ if ENABLE_SCIM:
 
 # Wolvia test endpoints
 app.include_router(test_logging.router, prefix="/api/v1/test", tags=["test"])
+# Also mount at /api for sentry_verify.py compatibility (expects /api/test-sentry)
+app.include_router(test_logging.router, prefix="/api", tags=["test"])
 
 
 try:
