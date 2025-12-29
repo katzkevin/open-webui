@@ -5,7 +5,8 @@ from fastapi import FastAPI
 
 @contextmanager
 def mock_webui_user(**kwargs):
-    from open_webui.main import app
+    # Must use same import path as abstract_integration_test.get_fast_api_client()
+    from main import app
 
     with mock_user(app, **kwargs):
         yield
@@ -20,6 +21,9 @@ def mock_user(app: FastAPI, **kwargs):
         get_current_user_by_api_key,
     )
     from open_webui.models.users import User
+    from fastapi import HTTPException, status
+
+    user_role = kwargs.get("role", "user")
 
     def create_user():
         user_parameters = {
@@ -35,10 +39,19 @@ def mock_user(app: FastAPI, **kwargs):
         }
         return User(**user_parameters)
 
+    def create_admin_user():
+        # Only allow admin access if role is admin
+        if user_role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied",
+            )
+        return create_user()
+
     app.dependency_overrides = {
         get_current_user: create_user,
         get_verified_user: create_user,
-        get_admin_user: create_user,
+        get_admin_user: create_admin_user,
         get_current_user_by_api_key: create_user,
     }
     yield

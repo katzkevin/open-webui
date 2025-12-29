@@ -144,7 +144,7 @@ class AbstractPostgresTest(AbstractIntegrationTest):
         # rollback everything not yet committed
         Session.commit()
 
-        # truncate all tables
+        # truncate all tables (CASCADE to handle FK constraints)
         tables = [
             "auth",
             "chat",
@@ -157,5 +157,5 @@ class AbstractPostgresTest(AbstractIntegrationTest):
             '"user"',
         ]
         for table in tables:
-            Session.execute(text(f"TRUNCATE TABLE {table}"))
+            Session.execute(text(f"TRUNCATE TABLE {table} CASCADE"))
         Session.commit()
