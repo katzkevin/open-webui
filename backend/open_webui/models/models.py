@@ -499,11 +499,11 @@ class ModelsTable:
                                 meta = json.loads(meta)
 
                             # Update meta fields if provided
-                            # Note: Backend uses snake_case (tool_ids), not camelCase (toolIds)
+                            # Frontend expects camelCase field names
                             if config.toolIds is not None:
-                                meta["tool_ids"] = config.toolIds
+                                meta["toolIds"] = config.toolIds
                             if config.defaultFeatureIds is not None:
-                                meta["default_feature_ids"] = config.defaultFeatureIds
+                                meta["defaultFeatureIds"] = config.defaultFeatureIds
                             if config.system_message is not None:
                                 meta["suggestion_prompts"] = config.system_message
                             elif config.system_message == "":
@@ -524,11 +524,12 @@ class ModelsTable:
 
                         elif options.create_if_missing:
                             # Create new model entry
+                            # Frontend expects camelCase field names
                             meta = {}
                             if config.toolIds is not None:
-                                meta["tool_ids"] = config.toolIds
+                                meta["toolIds"] = config.toolIds
                             if config.defaultFeatureIds is not None:
-                                meta["default_feature_ids"] = config.defaultFeatureIds
+                                meta["defaultFeatureIds"] = config.defaultFeatureIds
                             if config.system_message is not None:
                                 meta["suggestion_prompts"] = config.system_message
 

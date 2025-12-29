@@ -102,7 +102,7 @@ class TestModels(AbstractPostgresTest):
         assert data["summary"]["updated"] == 0
         assert data["summary"]["deleted"] == 0
 
-        # Verify the stored field names are snake_case (tool_ids, not toolIds)
+        # Verify the stored field names are camelCase (frontend expects this)
         with mock_webui_user(id="admin", role="admin"):
             response = self.fast_api_client.get(
                 self.create_url("/model"),
@@ -110,9 +110,9 @@ class TestModels(AbstractPostgresTest):
             )
         assert response.status_code == 200
         model_data = response.json()
-        # Backend uses snake_case field names
-        assert model_data["meta"]["tool_ids"] == ["tool-a", "tool-b"]
-        assert model_data["meta"]["default_feature_ids"] == ["tool-a"]
+        # Frontend expects camelCase field names
+        assert model_data["meta"]["toolIds"] == ["tool-a", "tool-b"]
+        assert model_data["meta"]["defaultFeatureIds"] == ["tool-a"]
 
     def test_bulk_configure_update_models(self):
         """Test bulk-configure updates existing model entries"""
