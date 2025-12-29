@@ -499,10 +499,11 @@ class ModelsTable:
                                 meta = json.loads(meta)
 
                             # Update meta fields if provided
+                            # Note: Backend uses snake_case (tool_ids), not camelCase (toolIds)
                             if config.toolIds is not None:
-                                meta["toolIds"] = config.toolIds
+                                meta["tool_ids"] = config.toolIds
                             if config.defaultFeatureIds is not None:
-                                meta["defaultFeatureIds"] = config.defaultFeatureIds
+                                meta["default_feature_ids"] = config.defaultFeatureIds
                             if config.system_message is not None:
                                 meta["suggestion_prompts"] = config.system_message
                             elif config.system_message == "":
@@ -525,9 +526,9 @@ class ModelsTable:
                             # Create new model entry
                             meta = {}
                             if config.toolIds is not None:
-                                meta["toolIds"] = config.toolIds
+                                meta["tool_ids"] = config.toolIds
                             if config.defaultFeatureIds is not None:
-                                meta["defaultFeatureIds"] = config.defaultFeatureIds
+                                meta["default_feature_ids"] = config.defaultFeatureIds
                             if config.system_message is not None:
                                 meta["suggestion_prompts"] = config.system_message
 
