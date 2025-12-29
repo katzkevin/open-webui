@@ -7,7 +7,7 @@ from aiocache import cached
 from fastapi import Request
 
 from open_webui.socket.utils import RedisDict
-from open_webui.routers import openai, ollama, bedrock
+from open_webui.routers import openai, ollama
 from open_webui.functions import get_function_models
 
 
@@ -59,11 +59,6 @@ async def fetch_openai_models(request: Request, user: UserModel = None):
     return openai_response["data"]
 
 
-async def fetch_bedrock_models(request: Request, user: UserModel = None):
-    bedrock_response = await bedrock.get_all_models(request, user=user)
-    return bedrock_response["data"]
-
-
 async def get_all_base_models(request: Request, user: UserModel = None):
     openai_task = (
         fetch_openai_models(request, user)
@@ -75,18 +70,13 @@ async def get_all_base_models(request: Request, user: UserModel = None):
         if request.app.state.config.ENABLE_OLLAMA_API
         else asyncio.sleep(0, result=[])
     )
-    bedrock_task = (
-        fetch_bedrock_models(request, user)
-        if request.app.state.config.ENABLE_BEDROCK_API
-        else asyncio.sleep(0, result=[])
-    )
     function_task = get_function_models(request)
 
-    openai_models, ollama_models, bedrock_models, function_models = await asyncio.gather(
-        openai_task, ollama_task, bedrock_task, function_task
+    openai_models, ollama_models, function_models = await asyncio.gather(
+        openai_task, ollama_task, function_task
     )
 
-    return function_models + openai_models + ollama_models + bedrock_models
+    return function_models + openai_models + ollama_models
 
 
 async def get_all_models(request, refresh: bool = False, user: UserModel = None):
