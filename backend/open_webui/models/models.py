@@ -536,7 +536,7 @@ class ModelsTable:
                             new_model = Model(
                                 id=config.id,
                                 user_id=user_id,
-                                base_model_id=config.id,  # Base model is itself
+                                base_model_id=None,  # Base models have null base_model_id
                                 name=config.id,  # Use ID as name initially
                                 meta=meta,
                                 params={},
