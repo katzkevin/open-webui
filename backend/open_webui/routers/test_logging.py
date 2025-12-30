@@ -39,11 +39,6 @@ async def test_logging(user=Depends(get_admin_user)):
     )
 
 
-class SentryTestError(Exception):
-    """Custom exception for Sentry testing that bypasses FastAPI's HTTPException handling."""
-    pass
-
-
 @router.get("/test-sentry")
 async def test_sentry(testId: Optional[str] = Query(None, description="Test ID for tracking in Sentry")):
     """
@@ -59,10 +54,10 @@ async def test_sentry(testId: Optional[str] = Query(None, description="Test ID f
     # Log the test attempt
     log.info(f"Sentry test triggered with testId: {test_id}")
 
-    # Capture the error in Sentry manually (guaranteed to be captured)
+    # Capture a real ValueError in Sentry (not a custom test exception)
     try:
-        raise SentryTestError(f"Sentry test error - testId: {test_id}")
-    except SentryTestError as e:
+        raise ValueError(f"Sentry test error - testId: {test_id}")
+    except ValueError as e:
         sentry_sdk.capture_exception(e)
         log.error(f"Sentry test error captured - testId: {test_id}")
 
