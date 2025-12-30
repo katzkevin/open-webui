@@ -12,6 +12,31 @@ This makes it unsuitable for our fork. We need to build our own simple Electron 
 
 ---
 
+## Research: What open-webui/desktop Does (and Why We're Not Using It)
+
+**Reviewed:** 2024-12-30
+
+The official repo at `github.com/open-webui/desktop` is an Electron + Svelte app (~2000 lines) that:
+
+### Their Architecture
+- **`src/main/index.ts`** (~450 lines) - Main process with window management, tray, IPC
+- **`src/main/utils/index.ts`** - Heavy lifting:
+  - Downloads & installs standalone Python 3.11 runtime (from astral-sh)
+  - Uses `uv` package manager to install/update `open-webui` package
+  - Spawns and manages the Python server process
+  - Platform-specific process tree termination (SIGTERM/SIGKILL on Unix, taskkill on Windows)
+  - Port checking, logging, config management
+
+### Why We're Not Using It
+1. **License**: Cannot modify branding, cannot use commercially without authorization
+2. **Complexity**: All that Python/server management is unnecessary for us since we run the server separately
+3. **Maintenance burden**: Their approach requires updating Python versions, handling package conflicts, etc.
+
+### Our Simplified Approach
+Since Wolvia runs Open WebUI as a deployed server (cloud or local), we just need a thin wrapper that points to a URL. This eliminates ~80% of their codebase.
+
+---
+
 ## Approach: Simple Electron Wrapper
 
 Since we already have Open WebUI running as a server (or will deploy it), we just need a thin Electron shell that:
@@ -66,11 +91,11 @@ desktop/
 ### Phase 3: Build & Distribution
 
 1. **electron-builder** configuration for:
-   - macOS: DMG + notarization
+   - macOS: DMG (unsigned initially - users right-click → Open to bypass Gatekeeper)
    - Windows: NSIS installer
    - Linux: AppImage, deb, rpm
-2. **Auto-updates** via electron-updater (optional)
-3. **Code signing** setup
+2. **Auto-updates** via electron-updater (optional, requires signing)
+3. **Code signing** setup (deferred - requires Apple Developer account $99/yr)
 
 ---
 

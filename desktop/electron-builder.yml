@@ -1,0 +1,39 @@
+appId: com.wolvia.desktop
+productName: Wolvia
+copyright: Copyright © 2024 Wolvia
+
+directories:
+  output: release
+  buildResources: resources
+
+files:
+  - dist/**/*
+  - src/renderer/**/*
+  - resources/**/*
+
+extraResources:
+  - from: resources/
+    to: ./
+
+mac:
+  category: public.app-category.productivity
+  icon: resources/icon.png
+  target:
+    - dmg
+    - zip
+
+win:
+  icon: resources/icon.png
+  target:
+    - nsis
+
+linux:
+  icon: resources/icon.png
+  target:
+    - AppImage
+    - deb
+  category: Network
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
