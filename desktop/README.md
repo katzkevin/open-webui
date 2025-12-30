@@ -51,17 +51,16 @@ Or run: `xattr -cr /Applications/Wolvia.app`
 
 ### GitHub Releases
 
-Desktop builds are triggered automatically alongside the main release (on `v*` tags).
+Desktop builds trigger automatically on push to `wolvia-main` (same as Docker builds).
 
-When you bump `package.json` version and push to `main`, the release workflow creates a tag, which triggers:
-1. Docker image build
-2. Desktop app builds (macOS/Windows/Linux)
+Version follows the same scheme: `{UPSTREAM_VERSION}-wolvia.{commit_count}`
+(e.g., `0.6.41-wolvia.42`)
 
-Download from: https://github.com/kevcmk/open-webui/releases
+Download from: https://github.com/katzkevin/open-webui/releases
 
 ### Manual Release
 
-You can also trigger a desktop build manually:
+Trigger a build manually:
 1. Go to Actions → "Desktop App Release"
 2. Click "Run workflow"
 

@@ -2,9 +2,13 @@ name: Desktop App Release
 
 on:
   push:
-    tags:
-      - 'v*'  # Triggers on same tags as main release
+    branches:
+      - wolvia-main
   workflow_dispatch:  # Manual trigger for testing
+
+env:
+  # IMPORTANT: Keep in sync with docker-build.yml
+  UPSTREAM_VERSION: "0.6.41"
 
 jobs:
   build-macos:
@@ -12,6 +16,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine version
+        id: version
+        run: |
+          UPSTREAM_TAG="v${{ env.UPSTREAM_VERSION }}"
+          if git rev-parse "$UPSTREAM_TAG" >/dev/null 2>&1; then
+            COMMIT_COUNT=$(git rev-list --count ${UPSTREAM_TAG}..HEAD)
+          else
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+          fi
+          VERSION="${{ env.UPSTREAM_VERSION }}-wolvia.${COMMIT_COUNT}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "📦 Desktop version: ${VERSION}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -23,6 +43,10 @@ jobs:
       - name: Install dependencies
         working-directory: desktop
         run: npm ci
+
+      - name: Update package.json version
+        working-directory: desktop
+        run: npm version ${{ steps.version.outputs.version }} --no-git-tag-version
 
       - name: Build macOS (arm64 + x64)
         working-directory: desktop
@@ -44,6 +68,22 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          UPSTREAM_TAG="v${{ env.UPSTREAM_VERSION }}"
+          if git rev-parse "$UPSTREAM_TAG" >/dev/null 2>&1; then
+            COMMIT_COUNT=$(git rev-list --count ${UPSTREAM_TAG}..HEAD)
+          else
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+          fi
+          VERSION="${{ env.UPSTREAM_VERSION }}-wolvia.${COMMIT_COUNT}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -55,6 +95,10 @@ jobs:
       - name: Install dependencies
         working-directory: desktop
         run: npm ci
+
+      - name: Update package.json version
+        working-directory: desktop
+        run: npm version ${{ steps.version.outputs.version }} --no-git-tag-version
 
       - name: Build Windows
         working-directory: desktop
@@ -74,6 +118,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine version
+        id: version
+        run: |
+          UPSTREAM_TAG="v${{ env.UPSTREAM_VERSION }}"
+          if git rev-parse "$UPSTREAM_TAG" >/dev/null 2>&1; then
+            COMMIT_COUNT=$(git rev-list --count ${UPSTREAM_TAG}..HEAD)
+          else
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+          fi
+          VERSION="${{ env.UPSTREAM_VERSION }}-wolvia.${COMMIT_COUNT}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -85,6 +144,10 @@ jobs:
       - name: Install dependencies
         working-directory: desktop
         run: npm ci
+
+      - name: Update package.json version
+        working-directory: desktop
+        run: npm version ${{ steps.version.outputs.version }} --no-git-tag-version
 
       - name: Build Linux
         working-directory: desktop
@@ -107,6 +170,24 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine version
+        id: version
+        run: |
+          UPSTREAM_TAG="v${{ env.UPSTREAM_VERSION }}"
+          if git rev-parse "$UPSTREAM_TAG" >/dev/null 2>&1; then
+            COMMIT_COUNT=$(git rev-list --count ${UPSTREAM_TAG}..HEAD)
+          else
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+          fi
+          VERSION="${{ env.UPSTREAM_VERSION }}-wolvia.${COMMIT_COUNT}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -118,13 +199,31 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          name: Wolvia Desktop ${{ github.ref_name }}
+          tag_name: desktop-v${{ steps.version.outputs.version }}
+          name: Wolvia Desktop ${{ steps.version.outputs.version }}
           draft: false
           prerelease: false
-          generate_release_notes: true
+          body: |
+            Wolvia Desktop App v${{ steps.version.outputs.version }}
+
+            **Downloads:**
+            - macOS (Apple Silicon): `Wolvia-*-arm64.dmg`
+            - macOS (Intel): `Wolvia-*-x64.dmg`
+            - Windows: `Wolvia-*-Setup.exe`
+            - Linux: `Wolvia-*.AppImage` or `.deb`
+
+            **First launch on macOS:** Right-click → Open (bypasses Gatekeeper for unsigned app)
           files: |
             artifacts/macos-builds/*
             artifacts/windows-builds/*
             artifacts/linux-builds/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Output summary
+        run: |
+          echo "## 🖥️ Desktop Release Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Download from: https://github.com/${{ github.repository }}/releases/tag/desktop-v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
