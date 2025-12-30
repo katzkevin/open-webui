@@ -1922,6 +1922,10 @@ async def get_app_config(request: Request):
         "name": app.state.WEBUI_NAME,
         "version": VERSION,
         "default_locale": str(DEFAULT_LOCALE),
+        "sentry": {
+            "dsn": SENTRY_DSN,
+            "environment": SENTRY_ENVIRONMENT,
+        },
         "oauth": {
             "providers": {
                 name: config.get("name", name)

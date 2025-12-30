@@ -36,18 +36,6 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Fetch Sentry DSN from SSM
-        id: sentry
-        run: |
-          # Determine environment from branch
-          if [ "${{ github.ref }}" = "refs/heads/wolvia-main" ]; then
-            SSM_ENV="prod"
-          else
-            SSM_ENV="dev"
-          fi
-          SENTRY_DSN=$(aws ssm get-parameter --name "/wolvia/${SSM_ENV}/sentry_dsn" --query "Parameter.Value" --output text 2>/dev/null || echo "")
-          echo "dsn=${SENTRY_DSN}" >> $GITHUB_OUTPUT
-
       - name: Determine version and environment
         id: version
         run: |
@@ -103,9 +91,6 @@ jobs:
             ${{ steps.login-ecr.outputs.registry }}/wolvia-prod-openwebui:${{ steps.version.outputs.version }}
             ${{ steps.login-ecr.outputs.registry }}/wolvia-prod-openwebui:${{ steps.version.outputs.git_sha }}
             ${{ steps.login-ecr.outputs.registry }}/wolvia-prod-openwebui:latest
-          build-args: |
-            VITE_SENTRY_DSN=${{ steps.sentry.outputs.dsn }}
-            VITE_SENTRY_ENVIRONMENT=${{ steps.version.outputs.environment }}
           # Use both GHA cache and ECR registry cache for faster builds
           cache-from: |
             type=gha

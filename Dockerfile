@@ -22,15 +22,9 @@ ARG BUILD_HASH=dev-build
 ARG UID=0
 ARG GID=0
 
-# Sentry DSN for frontend error tracking (set at build time)
-ARG VITE_SENTRY_DSN=""
-ARG VITE_SENTRY_ENVIRONMENT=""
-
 ######## WebUI frontend ########
 FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS build
 ARG BUILD_HASH
-ARG VITE_SENTRY_DSN
-ARG VITE_SENTRY_ENVIRONMENT
 
 # Set Node.js options (heap limit Allocation failed - JavaScript heap out of memory)
 # ENV NODE_OPTIONS="--max-old-space-size=4096"
@@ -45,8 +39,6 @@ RUN npm ci --force
 
 COPY . .
 ENV APP_BUILD_HASH=${BUILD_HASH}
-ENV VITE_SENTRY_DSN=${VITE_SENTRY_DSN}
-ENV VITE_SENTRY_ENVIRONMENT=${VITE_SENTRY_ENVIRONMENT}
 RUN npm run build
 
 ######## WebUI backend ########
