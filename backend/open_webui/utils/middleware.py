@@ -600,7 +600,7 @@ async def chat_memory_handler(
             user,
         )
     except Exception as e:
-        log.debug(e)
+        log.error(f"Chat memory query error: {e}")
         results = None
 
     user_context = ""
