@@ -5,6 +5,7 @@ import os
 import base64
 import textwrap
 
+import aiohttp
 import asyncio
 from aiocache import cached
 from typing import Any, Optional
@@ -124,6 +125,9 @@ from open_webui.env import (
     BYPASS_MODEL_ACCESS_CONTROL,
     ENABLE_REALTIME_CHAT_SAVE,
     ENABLE_QUERIES_CACHE,
+    SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY,
+    WOLVIA_MEMORY_CACHE_TTL,
 )
 from open_webui.constants import TASKS
 
@@ -518,6 +522,68 @@ async def chat_completion_tools_handler(
         del body["metadata"]["files"]
 
     return body, {"sources": sources}
+
+
+####################################
+# WOLVIA MEMORY INJECTION
+####################################
+
+
+@cached(ttl=WOLVIA_MEMORY_CACHE_TTL, key="wolvia_persistent_memory_default")
+async def fetch_wolvia_memory() -> str:
+    """Fetch shared persistent-memory from Supabase.
+
+    Fetches org-wide memory where user_id IS NULL. Single cache entry
+    since all users receive the same content.
+    """
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return ""
+
+    try:
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            async with session.get(
+                f"{SUPABASE_URL}/rest/v1/memories",
+                params={
+                    "slug": "eq.persistent-memory",
+                    "namespace": "eq.default",
+                    "user_id": "is.null",
+                    "select": "text",
+                },
+                headers={
+                    "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                },
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as response:
+                if response.status != 200:
+                    log.error(f"Supabase API returned status {response.status}")
+                    return ""
+                data = await response.json()
+                return data[0].get("text", "") if data else ""
+    except Exception as e:
+        log.error(f"Wolvia memory fetch error: {e}")
+        return ""
+
+
+async def wolvia_memory_handler(
+    request: Request, form_data: dict, extra_params: dict, user
+) -> dict:
+    """Inject Wolvia memory into system message on every request."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return form_data
+
+    try:
+        memory_text = await fetch_wolvia_memory()
+        if memory_text:
+            form_data["messages"] = add_or_update_system_message(
+                f"User Context from Wolvia:\n{memory_text}\n",
+                form_data["messages"],
+                append=True,
+            )
+    except Exception as e:
+        log.error(f"Wolvia memory handler error: {e}")
+
+    return form_data
 
 
 async def chat_memory_handler(
@@ -1259,6 +1325,9 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             )
         except Exception as e:
             raise Exception(f"{e}")
+
+    # WOLVIA: Inject Wolvia persistent memory
+    form_data = await wolvia_memory_handler(request, form_data, extra_params, user)
 
     features = form_data.pop("features", None)
     if features:

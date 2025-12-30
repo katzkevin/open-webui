@@ -885,3 +885,13 @@ PIP_PACKAGE_INDEX_OPTIONS = os.getenv("PIP_PACKAGE_INDEX_OPTIONS", "").split()
 ####################################
 
 EXTERNAL_PWA_MANIFEST_URL = os.environ.get("EXTERNAL_PWA_MANIFEST_URL")
+
+
+####################################
+# WOLVIA
+####################################
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+
+WOLVIA_MEMORY_CACHE_TTL = int(os.environ.get("WOLVIA_MEMORY_CACHE_TTL", "900"))  # 15 min default
