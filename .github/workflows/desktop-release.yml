@@ -3,13 +3,8 @@ name: Desktop App Release
 on:
   push:
     tags:
-      - 'desktop-v*'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version tag (e.g., 1.0.0)'
-        required: true
-        default: '1.0.0'
+      - 'v*'  # Triggers on same tags as main release
+  workflow_dispatch:  # Manual trigger for testing
 
 jobs:
   build-macos:

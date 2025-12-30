@@ -51,26 +51,19 @@ Or run: `xattr -cr /Applications/Wolvia.app`
 
 ### GitHub Releases
 
-Releases are built automatically via GitHub Actions when a version tag is pushed:
-```bash
-# Tag a new release
-git tag desktop-v1.0.0
-git push origin desktop-v1.0.0
-```
+Desktop builds are triggered automatically alongside the main release (on `v*` tags).
 
-This triggers builds for:
-- macOS (arm64 + x64) → `.dmg`, `.zip`
-- Windows → `.exe`
-- Linux → `.AppImage`, `.deb`
+When you bump `package.json` version and push to `main`, the release workflow creates a tag, which triggers:
+1. Docker image build
+2. Desktop app builds (macOS/Windows/Linux)
 
 Download from: https://github.com/kevcmk/open-webui/releases
 
 ### Manual Release
 
-You can also trigger a release manually:
+You can also trigger a desktop build manually:
 1. Go to Actions → "Desktop App Release"
 2. Click "Run workflow"
-3. Enter version number
 
 ## Architecture
 
