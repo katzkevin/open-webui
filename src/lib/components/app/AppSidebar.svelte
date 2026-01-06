@@ -28,7 +28,7 @@
 				<!-- Wolvia logo is dark blue; grayscale then invert to make it white in dark mode -->
 				<img
 					src="{WEBUI_BASE_URL}/static/splash.png"
-					class="size-11 dark:grayscale dark:invert p-0.5"
+					class="size-11 dark:brightness-0 dark:invert p-0.5"
 					alt="logo"
 					draggable="false"
 				/>

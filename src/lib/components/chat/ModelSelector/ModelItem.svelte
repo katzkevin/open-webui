@@ -104,7 +104,7 @@
 					<img
 						src={getModelIcon(item.model)}
 						alt="Model"
-						class="rounded-full size-5 flex items-center"
+						class="rounded-full size-5 flex items-center dark:brightness-0 dark:invert"
 					/>
 				</Tooltip>
 			</div>

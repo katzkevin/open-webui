@@ -175,7 +175,7 @@
 							<img
 								src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${item.id}&lang=${$i18n.language}`}
 								alt={item?.data?.name ?? item.id}
-								class="rounded-full size-5 items-center mr-2"
+								class="rounded-full size-5 items-center mr-2 dark:brightness-0 dark:invert"
 							/>
 						{:else if item.type === 'user'}
 							<img

@@ -82,95 +82,148 @@ The 15-user threshold provides a safety buffer below the 50-user license limit.
 
 ---
 
-## Modified Files
+## Fork Modifications Summary
 
-This fork contains the following modifications relative to upstream:
+This fork contains **82 modified files** relative to upstream. Each modification has a clear purpose.
 
-### CI/CD & Infrastructure (New Files)
+---
+
+## 1. Branding (BSD-3 Clause 5(i) Exemption)
+
+**Why**: Replace Open WebUI branding with Wolvia branding. Legal under BSD-3 Clause 5(i) for <50 users.
+
+### Favicon & Images
+All replaced with Wolvia logo:
+- `static/static/favicon.png`, `favicon.ico`, `favicon-16x16.png`, `favicon-32x32.png`, `favicon-96x96.png`
+- `static/static/favicon-dark.png`, `apple-touch-icon.png`, `logo.png`, `splash.png`, `splash-dark.png`
+- `static/static/favicon.svg` - Removed (using PNG instead)
+- `backend/open_webui/static/*` - Duplicates for backend serving
+
+### Code Changes
+| File | Change |
+|------|--------|
+| `backend/open_webui/env.py` | Removed automatic "(Open WebUI)" suffix from WEBUI_NAME |
+| `src/routes/+layout.svelte` | Removed "• Open WebUI" from notification titles |
+| `src/lib/components/channel/Channel.svelte` | Removed "• Open WebUI" from page titles |
+| `src/lib/components/chat/ShareChatModal.svelte` | Disabled "Share to Open WebUI Community" |
+
+---
+
+## 2. Observability & Error Tracking
+
+**Why**: Production monitoring with Sentry and OpenTelemetry for debugging and performance.
 
 | File | Description |
 |------|-------------|
-| `.github/workflows/docker-build.yml` | GitHub Actions workflow for automated Docker builds to ECR |
-| `push-and-wait-for-build.sh` | Script to push changes and wait for GitHub Actions build to complete |
-| `CLAUDE.md` | Development instructions for Claude Code |
-| `README.wolvia.md` | This file - Wolvia fork documentation |
-| `README.bulk_configure.md` | Documentation for the bulk-configure API endpoint |
+| `backend/open_webui/utils/telemetry/chat_tracing.py` | OpenTelemetry spans for chat completion flow |
+| `backend/open_webui/utils/telemetry/constants.py` | Span attribute constants |
+| `backend/open_webui/main.py` | Sentry SDK integration (backend) |
+| `src/hooks.client.ts` | Sentry SDK integration (frontend) |
+| `src/app.html` | Sentry script loading |
+| `backend/open_webui/utils/middleware.py` | `trace_chat_span` wrappers, `log.error` for chat memory errors |
+| `backend/open_webui/routers/test_logging.py` | Test endpoints for Datadog/Sentry validation |
 
-### Favicon & Images (Replaced with Wolvia Branding)
+---
+
+## 3. UI Customizations
+
+**Why**: Hide features we don't use, add provider-specific model icons, fix dark mode.
 
 | File | Change |
 |------|--------|
-| `static/static/favicon.png` | Replaced with Wolvia logo |
-| `static/static/favicon.ico` | Replaced with Wolvia logo |
-| `static/static/favicon-16x16.png` | Replaced with Wolvia logo |
-| `static/static/favicon-32x32.png` | Replaced with Wolvia logo |
-| `static/static/favicon-96x96.png` | Replaced with Wolvia logo |
-| `static/static/favicon-dark.png` | Replaced with Wolvia logo |
-| `static/static/apple-touch-icon.png` | Replaced with Wolvia logo |
-| `static/static/logo.png` | Replaced with Wolvia logo |
-| `static/static/splash.png` | Replaced with Wolvia logo |
-| `static/static/splash-dark.png` | Replaced with Wolvia logo |
-| `static/static/favicon.svg` | Removed (using PNG instead) |
-| `backend/open_webui/static/*` | All favicon files duplicated for backend serving |
+| `static/static/custom.css` | Hides Temporary Chat, Controls button, Workspace sidebar |
+| `src/lib/assets/wolvia-custom.css` | Additional Wolvia-specific styles |
+| `src/lib/components/chat/ModelSelector/ModelItem.svelte` | Provider icons (Bedrock/OpenAI) based on model ID; dark mode invert |
+| `static/static/bedrock.svg`, `openai.svg` | Provider icon assets |
 
-### Provider Icons (New Files)
+### Dark Mode Model Icons
+
+Added `dark:invert` to all model profile images so they display correctly in dark mode:
+- `chat/Placeholder.svelte` - Main page model icon
+- `chat/ChatPlaceholder.svelte` - Chat placeholder model icon
+- `chat/Messages/ResponseMessage.svelte` - Chat response avatar
+- `chat/MessageInput.svelte` - @ selected model indicator
+- `chat/MessageInput/Commands/Models.svelte` - @ command dropdown
+- `chat/Overview/Node.svelte` - Chat overview nodes
+- `layout/Sidebar/PinnedModelItem.svelte` - Sidebar pinned models
+- `channel/MessageInput/MentionList.svelte` - Channel mention list
+- `channel/Messages/Message.svelte` - Channel message model icons
+
+---
+
+## 4. New API Endpoints
+
+**Why**: Bulk model configuration for sync_settings.ts automation.
 
 | File | Description |
 |------|-------------|
-| `static/static/bedrock.svg` | AWS Bedrock provider icon |
-| `static/static/openai.svg` | OpenAI provider icon |
-| `backend/open_webui/static/bedrock.svg` | Backend copy of Bedrock icon |
-| `backend/open_webui/static/openai.svg` | Backend copy of OpenAI icon |
+| `backend/open_webui/routers/models.py` | `POST /api/v1/models/bulk-configure` endpoint |
+| `backend/open_webui/models/models.py` | `bulk_configure()` method and Pydantic models |
+| `README.bulk_configure.md` | API documentation |
 
-### UI Customizations
+---
 
-| File | Change |
-|------|--------|
-| `static/static/custom.css` | Hides Temporary Chat button, Controls button, and Workspace sidebar item |
-| `src/lib/components/chat/ModelSelector/ModelItem.svelte` | Shows provider-specific icons (Bedrock, OpenAI) based on model ID |
+## 5. Desktop App (Electron)
 
-### Branding Removal (Code Changes)
-
-| File | Change |
-|------|--------|
-| `backend/open_webui/env.py` | Removed automatic "(Open WebUI)" suffix appending to custom WEBUI_NAME |
-| `src/routes/+layout.svelte` | Removed "• Open WebUI" from chat notification titles |
-| `src/routes/+layout.svelte` | Removed "• Open WebUI" from channel message notification titles |
-| `src/lib/components/channel/Channel.svelte` | Removed "• Open WebUI" from channel page titles |
-| `src/lib/components/chat/ShareChatModal.svelte` | Disabled "Share to Open WebUI Community" feature |
-
-### New API Endpoints
+**Why**: Native desktop application for Wolvia.
 
 | File | Description |
 |------|-------------|
-| `backend/open_webui/routers/models.py` | Added `POST /api/v1/models/bulk-configure` endpoint for bulk model configuration |
-| `backend/open_webui/models/models.py` | Added `bulk_configure()` method and related Pydantic models (`BulkConfigureRequest`, `BulkConfigureResponse`, etc.) |
-| `backend/open_webui/routers/test_logging.py` | Test endpoint for Datadog and Sentry integration validation |
+| `desktop/*` | Electron app (index.ts, error.html, package.json, etc.) |
+| `.github/workflows/desktop-release.yml` | Desktop build/release workflow |
 
-### Telemetry & Observability
+---
+
+## 6. CI/CD & Build Infrastructure
+
+**Why**: Automated Docker builds to ECR, versioning.
 
 | File | Description |
 |------|-------------|
-| `backend/open_webui/utils/telemetry/chat_tracing.py` | OpenTelemetry chat completion tracing utilities |
-| `backend/open_webui/utils/telemetry/constants.py` | Chat span attribute constants for OpenTelemetry |
-| `backend/open_webui/main.py` | Added Sentry SDK integration with FastAPI/Starlette |
+| `.github/workflows/docker-build.yml` | Docker build → ECR workflow |
+| `push-and-wait-for-build.sh` | Push and wait for CI completion |
+| `backend/justfile` | Backend development tasks |
 
-### Logging Improvements
+---
+
+## 7. Documentation
+
+**Why**: Fork-specific documentation for development and operations.
+
+| File | Description |
+|------|-------------|
+| `CLAUDE.md` | Claude Code development instructions |
+| `README.wolvia.md` | This file - complete fork documentation |
+| `README.bulk_configure.md` | Bulk configure API docs |
+| `SETUP.md` | Local development setup |
+| `claude-todos/*.md` | Task specifications |
+
+---
+
+## 8. Dependencies
+
+**Why**: Additional packages for telemetry and Sentry.
 
 | File | Change |
 |------|--------|
-| `backend/open_webui/env.py` | Added per-source log level configuration (e.g., `AUDIO_LOG_LEVEL`, `MODELS_LOG_LEVEL`, etc.) |
-| Various backend files | Updated to use source-specific log levels via `SRC_LOG_LEVELS` |
+| `backend/requirements.txt` | Added opentelemetry, sentry-sdk |
+| `package.json` | Added @sentry/sveltekit |
+| `package-lock.json` | Lock file updates |
 
-### Test Infrastructure
+---
+
+## 9. Minor Fixes & Improvements
 
 | File | Change |
 |------|--------|
-| `backend/open_webui/test/apps/webui/routers/test_models.py` | Updated tests for models router, added bulk-configure endpoint tests |
-| `backend/open_webui/test/util/abstract_integration_test.py` | Test infrastructure updates |
-| `backend/open_webui/test/util/mock_user.py` | Mock user utilities for testing |
+| `backend/open_webui/utils/middleware.py` | `log.error` instead of `log.debug` for chat memory errors |
+| `backend/open_webui/utils/chat.py` | Minor improvements |
+| `backend/open_webui/routers/ollama.py` | Minor fixes |
+| `backend/open_webui/routers/openai.py` | Minor fixes |
 
-### NOT Modified (Legal Compliance)
+---
+
+## NOT Modified (Legal Compliance)
 
 These files are **intentionally unchanged** to maintain license compliance:
 
@@ -260,5 +313,5 @@ For enterprise licensing inquiries:
 
 ---
 
-**Last Updated**: 2025-12-29
+**Last Updated**: 2026-01-05
 **Fork Maintainer**: Wolvia Development Team

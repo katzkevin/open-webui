@@ -241,7 +241,7 @@
 							src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${message.reply_to_message.meta.model_id}`}
 							alt={message.reply_to_message.meta.model_name ??
 								message.reply_to_message.meta.model_id}
-							class="size-4 ml-0.5 rounded-full object-cover"
+							class="size-4 ml-0.5 rounded-full object-cover dark:brightness-0 dark:invert"
 						/>
 					{:else}
 						<img
@@ -275,7 +275,7 @@
 						<img
 							src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${message.meta.model_id}`}
 							alt={message.meta.model_name ?? message.meta.model_id}
-							class="size-8 translate-y-1 ml-0.5 object-cover rounded-full"
+							class="size-8 translate-y-1 ml-0.5 object-cover rounded-full dark:brightness-0 dark:invert"
 						/>
 					{:else}
 						<ProfilePreview user={message.user}>

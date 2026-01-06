@@ -45,7 +45,7 @@
 			<div class="flex w-full">
 				<ProfileImage
 					src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${data.model?.id ?? data.message.model}&lang=${$i18n.language}`}
-					className={'size-5 -translate-y-[1px]'}
+					className={'size-5 -translate-y-[1px] dark:brightness-0 dark:invert'}
 				/>
 
 				<div class="ml-2">
