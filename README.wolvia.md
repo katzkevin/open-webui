@@ -4,7 +4,7 @@
 
 This is a fork of [Open WebUI](https://github.com/open-webui/open-webui) with Wolvia-specific branding and feature modifications, compliant with the BSD-3-Clause License Clause 5(i) exemption for deployments with <50 users.
 
-**Current Upstream Version**: `0.6.41`
+**Current Upstream Version**: `0.7.2`
 
 ---
 
@@ -16,13 +16,13 @@ This fork uses **GitHub Actions** to automatically build and version Docker imag
 
 **Format**: `{upstream_version}-wolvia.{build_number}`
 
-- `upstream_version`: The Open WebUI version this fork is based on (e.g., `0.6.41`)
+- `upstream_version`: The Open WebUI version this fork is based on (e.g., `0.7.2`)
 - `wolvia`: Marks this as a Wolvia-branded fork
 - `build_number`: GitHub Actions run number
 
 **Examples**:
-- `0.6.41-wolvia.14070` - Build #14070 based on Open WebUI v0.6.41
-- `0.6.41-wolvia.14071` - Subsequent build with fixes/updates
+- `0.7.2-wolvia.14070` - Build #14070 based on Open WebUI v0.7.2
+- `0.7.2-wolvia.14071` - Subsequent build with fixes/updates
 
 ### How It Works
 
@@ -55,7 +55,7 @@ When merging a new Open WebUI release:
 
 After GitHub Actions builds and pushes the image:
 
-1. **Update terraform**: Set `openwebui_version = "0.6.41-wolvia.X"` in `wolvia/terraform/environments/{dev|prod}/main.tf`
+1. **Update terraform**: Set `openwebui_version = "0.7.2-wolvia.X"` in `wolvia/terraform/environments/{dev|prod}/main.tf`
 2. **Deploy**: Run `./scripts/push-and-wait.sh` in the main Wolvia repo
 3. **Verify**: Check ECS task definition uses new image
 
@@ -313,5 +313,5 @@ For enterprise licensing inquiries:
 
 ---
 
-**Last Updated**: 2026-01-05
+**Last Updated**: 2026-01-15
 **Fork Maintainer**: Wolvia Development Team

@@ -20,16 +20,16 @@ The upstream repo is `github.com/open-webui/open-webui`.
 
 1. Push changes to `wolvia-main` branch
 2. GitHub Actions automatically builds and pushes the image to ECR
-3. Get the new version tag from the GitHub Actions workflow output (e.g., `0.6.41-wolvia.{run_number}`)
+3. Get the new version tag from the GitHub Actions workflow output (e.g., `0.7.2-wolvia.{run_number}`)
    - Check logs: `gh run view <run_id> --repo katzkevin/open-webui --log | grep "VERSION:"`
 4. Go to `../wolvia` repo and update `openwebui_version` in `terraform/modules/infrastructure/ecs.tf`
 5. Push to the wolvia repo's `dev` or `main` branch to trigger the Release and Deploy Pipeline
 
 ### Version Format
 
-- `{upstream_version}-wolvia.{github_run_number}` - e.g., `0.6.41-wolvia.14070`
+- `{upstream_version}-wolvia.{github_run_number}` - e.g., `0.7.2-wolvia.14070`
 - The run number comes from the GitHub Actions workflow
-- Currently based on upstream v0.6.41
+- Currently based on upstream v0.7.2
 
 ### Syncing with Upstream
 
