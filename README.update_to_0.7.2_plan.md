@@ -1,7 +1,7 @@
 # Open WebUI Upgrade Plan: v0.6.43 → v0.7.2
 
 **Date**: 2026-01-15
-**Status**: In Progress
+**Status**: COMPLETED (Phase 1) - Ready to push
 
 ---
 
@@ -16,31 +16,36 @@ Upgrading the Wolvia fork from Open WebUI v0.6.43 to v0.7.2.
 
 ---
 
-## Phase 1: Merge Upstream (This Repo)
+## Phase 1: Merge Upstream (This Repo) - COMPLETED
 
-### Step 1: Fetch and Merge
+### Step 1: Fetch and Merge - DONE
 ```bash
 git fetch upstream
 git merge v0.7.2
 ```
 
-### Step 2: Resolve Conflicts
-Expected conflict areas based on Wolvia modifications:
-- [ ] `backend/open_webui/main.py` - Sentry integration
-- [ ] `backend/open_webui/routers/models.py` - bulk-configure endpoint
-- [ ] `backend/open_webui/utils/middleware.py` - trace_chat_span
-- [ ] `package.json` / `package-lock.json` - Sentry deps
-- [ ] Various UI components with dark mode fixes
+### Step 2: Resolve Conflicts - DONE
+Actual conflicts resolved:
 
-### Step 3: Update Version References
-- [ ] `.github/workflows/docker-build.yml` - Set `UPSTREAM_VERSION: "0.7.2"`
-- [ ] `README.wolvia.md` - Update "Current Upstream Version" to 0.7.2
+| File | Resolution |
+|------|------------|
+| `backend/open_webui/utils/chat.py` | Kept Wolvia tracing spans + added upstream's `bypass_system_prompt` parameter |
+| `backend/open_webui/utils/middleware.py` | Kept Wolvia tracing spans + added native FC checks + file_context capability check |
+| `src/lib/components/chat/ModelSelector/ModelItem.svelte` | Kept dark mode fix (`dark:brightness-0 dark:invert`) + added `loading="lazy"` |
+| `package-lock.json` | Accepted upstream version |
+| `backend/open_webui/test/util/abstract_integration_test.py` | Deleted (upstream removed) |
+| `backend/open_webui/test/util/mock_user.py` | Deleted (upstream removed) |
 
-### Step 4: Local Testing
-- [ ] `npm install` and `npm run build` - Frontend builds
-- [ ] `pip install -r backend/requirements.txt` - Backend deps
-- [ ] Verify bulk-configure API still works
-- [ ] Verify Sentry integration compiles
+### Step 3: Update Version References - DONE
+- [x] `.github/workflows/docker-build.yml` - Set `UPSTREAM_VERSION: "0.7.2"`
+- [x] `.github/workflows/desktop-release.yml` - Set `UPSTREAM_VERSION: "0.7.2"`
+- [x] `README.wolvia.md` - Updated all version references
+- [x] `CLAUDE.md` - Updated all version references
+
+### Step 4: Local Testing - DONE
+- [x] Python syntax check passed
+- [ ] Full build test skipped (local Node v23 > project's max v22)
+- CI will handle full build validation
 
 ### Step 5: Push to wolvia-main
 ```bash
@@ -49,30 +54,44 @@ git push origin wolvia-main
 
 ---
 
-## Phase 2: Wolvia Repo Updates
+## Phase 2: Wolvia Repo Updates (After CI Build)
 
-### Step 1: Regenerate openwebui_python_client
-After the new version is running:
+### Step 1: Wait for GitHub Actions Build
+After pushing, monitor the build:
 ```bash
-# Start local OpenWebUI with new version
-# Then regenerate client from OpenAPI spec
-openapi-generator generate \
-  -i http://localhost:8080/openapi.json \
-  -g python \
-  -o openwebui_python_client \
-  --package-name openwebui_client
+gh run list --repo katzkevin/open-webui --limit 5
+gh run view <run_id> --repo katzkevin/open-webui --log | grep "VERSION:"
 ```
+
+The new version will be: `0.7.2-wolvia.{run_number}`
 
 ### Step 2: Update Terraform
 In `wolvia/terraform/modules/infrastructure/ecs.tf`:
 ```hcl
 locals {
+  # OpenWebUI version - Wolvia fork with branding modifications
+  # Format: {upstream_version}-wolvia.{build} (e.g., 0.7.2-wolvia.XXXXX)
+  # Based on Open WebUI v0.7.2 with BSD-3 Clause 5(i) compliant branding changes
   openwebui_version = "0.7.2-wolvia.{NEW_BUILD_NUMBER}"
 }
 ```
 
-### Step 3: New Environment Variables (Optional)
-Consider adding to ECS task definition:
+### Step 3: Regenerate openwebui_python_client (If needed)
+After the new version is deployed to dev:
+```bash
+# From wolvia repo
+cd openwebui_python_client
+openapi-generator generate \
+  -i https://chat-dev.wolvia.com/openapi.json \
+  -g python \
+  -o . \
+  --package-name openwebui_client
+```
+
+Check if API changes affect the client.
+
+### Step 4: New Environment Variables (Optional)
+Consider adding to ECS task definition in `ecs.tf`:
 ```hcl
 # Audit logs to CloudWatch (instead of file)
 {
@@ -85,7 +104,7 @@ Consider adding to ECS task definition:
 },
 ```
 
-### Step 4: Review Integration Tests
+### Step 5: Review Integration Tests
 Check if any API changes affect:
 - `integration_test_user_settings.ts`
 - `integration_test_openwebui_models.ts`
@@ -135,7 +154,7 @@ Users can ask models to:
 ## Rollback Plan
 
 If issues occur:
-1. Revert terraform to previous `openwebui_version`
+1. Revert terraform to previous `openwebui_version` (`0.6.41-wolvia.14692`)
 2. Push to wolvia repo to redeploy
 3. Investigate issues on dev environment
 
@@ -143,12 +162,18 @@ If issues occur:
 
 ## Completion Checklist
 
-- [ ] Upstream merged successfully
-- [ ] All conflicts resolved
-- [ ] Workflow version updated
-- [ ] README.wolvia.md updated
+### Phase 1 (This Repo)
+- [x] Upstream merged successfully
+- [x] All conflicts resolved
+- [x] Workflow version updated
+- [x] README.wolvia.md updated
+- [ ] Push to wolvia-main
 - [ ] GitHub Actions build passes
-- [ ] openwebui_python_client regenerated
-- [ ] Terraform updated with new version
-- [ ] Dev environment tested
-- [ ] Prod deployment completed
+
+### Phase 2 (Wolvia Repo)
+- [ ] Get new version tag from CI
+- [ ] Update terraform with new version
+- [ ] Deploy to dev
+- [ ] Regenerate openwebui_python_client (if needed)
+- [ ] Run integration tests
+- [ ] Deploy to prod
