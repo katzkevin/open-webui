@@ -127,14 +127,19 @@ All replaced with Wolvia logo:
 
 ## 3. UI Customizations
 
-**Why**: Hide features we don't use, add provider-specific model icons, fix dark mode.
+**Why**: Hide features we don't use, add provider-specific model icons, fix dark mode, privacy warnings.
 
 | File | Change |
 |------|--------|
 | `static/static/custom.css` | Hides Temporary Chat, Controls button, Workspace sidebar |
 | `src/lib/assets/wolvia-custom.css` | Additional Wolvia-specific styles |
 | `src/lib/components/chat/ModelSelector/ModelItem.svelte` | Provider icons (Bedrock/OpenAI) based on model ID; dark mode invert |
+| `src/lib/components/chat/Chat.svelte` | **OpenAI privacy warning banner** - yellow warning shown when using OpenAI models |
 | `static/static/bedrock.svg`, `openai.svg` | Provider icon assets |
+
+### OpenAI Privacy Warning
+
+When users select an OpenAI model (gpt-*, o1-*, o3-*, o4-*, chatgpt-*, text-*, dall-e-*), a yellow warning banner appears at the top of the chat informing them that their data is sent to OpenAI servers, not Wolvia-controlled infrastructure. This helps users make informed decisions about data privacy.
 
 ### Dark Mode Model Icons
 
@@ -313,5 +318,5 @@ For enterprise licensing inquiries:
 
 ---
 
-**Last Updated**: 2026-01-15
+**Last Updated**: 2026-01-22
 **Fork Maintainer**: Wolvia Development Team
