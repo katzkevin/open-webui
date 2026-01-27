@@ -3,6 +3,7 @@
 	import { getContext, onMount, tick } from 'svelte';
 	import { fly } from 'svelte/transition';
 	import { flyAndScale } from '$lib/utils/transitions';
+	import * as Sentry from '@sentry/svelte';
 
 	import { config, user, tools as _tools, mobile, settings, toolServers } from '$lib/stores';
 
@@ -88,7 +89,51 @@
 			}
 		}
 
-		selectedToolIds = selectedToolIds.filter((id) => Object.keys(tools).includes(id));
+		// Filter out any tool IDs that don't exist in the tools object
+		const previousToolIds = [...selectedToolIds];
+		const availableToolIds = Object.keys(tools);
+		selectedToolIds = selectedToolIds.filter((id) => availableToolIds.includes(id));
+
+		// Track if any tools were silently removed
+		const removedToolIds = previousToolIds.filter((id) => !selectedToolIds.includes(id));
+		if (removedToolIds.length > 0) {
+			// Gather MCP server info for debugging
+			const mcpServerIds = ($toolServers ?? []).map((s: any) => s?.info?.id).filter(Boolean);
+
+			Sentry.addBreadcrumb({
+				category: 'tools',
+				message: 'IntegrationsMenu init - some selected tools were not found',
+				level: 'warning',
+				data: {
+					previousToolIds,
+					availableToolIds,
+					removedToolIds,
+					remainingToolIds: selectedToolIds,
+					mcpServerIds,
+					toolsStoreCount: ($_tools ?? []).length,
+					toolServersCount: ($toolServers ?? []).length
+				}
+			});
+
+			// Capture event if MCP tools specifically were removed (likely server issue)
+			const removedMcpTools = removedToolIds.filter((id: string) => id.startsWith('server:mcp:'));
+			if (removedMcpTools.length > 0) {
+				Sentry.captureMessage('MCP tools not found in IntegrationsMenu', {
+					level: 'warning',
+					tags: {
+						component: 'IntegrationsMenu',
+						removedCount: String(removedMcpTools.length)
+					},
+					extra: {
+						removedMcpTools,
+						availableToolIds,
+						mcpServerIds,
+						toolServersCount: ($toolServers ?? []).length,
+						toolsStoreCount: ($_tools ?? []).length
+					}
+				});
+			}
+		}
 	};
 </script>
 
@@ -345,6 +390,18 @@
 
 									const state = tools[toolId].enabled;
 									await tick();
+
+									Sentry.addBreadcrumb({
+										category: 'tools',
+										message: `User ${state ? 'enabled' : 'disabled'} tool via IntegrationsMenu`,
+										level: 'info',
+										data: {
+											toolId,
+											toolName: tools[toolId]?.name,
+											enabled: state,
+											previousSelectedToolIds: selectedToolIds
+										}
+									});
 
 									if (state) {
 										selectedToolIds = [...selectedToolIds, toolId];

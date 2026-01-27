@@ -2,6 +2,7 @@
 	import { v4 as uuidv4 } from 'uuid';
 	import { toast } from 'svelte-sonner';
 	import { PaneGroup, Pane, PaneResizer } from 'paneforge';
+	import * as Sentry from '@sentry/svelte';
 
 	import { getContext, onDestroy, onMount, tick } from 'svelte';
 	import { fade } from 'svelte/transition';
@@ -176,6 +177,8 @@
 	const navigateHandler = async () => {
 		loading = true;
 
+		const previousToolIds = [...selectedToolIds];
+
 		prompt = '';
 		messageInput?.setText('');
 
@@ -184,6 +187,17 @@
 		selectedFilterIds = [];
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
+
+		Sentry.addBreadcrumb({
+			category: 'tools',
+			message: 'Navigation - tools cleared',
+			level: previousToolIds.length > 0 ? 'warning' : 'info',
+			data: {
+				previousToolIds,
+				chatIdProp,
+				trigger: 'navigation'
+			}
+		});
 
 		const storageChatInput = sessionStorage.getItem(
 			`chat-input${chatIdProp ? `-${chatIdProp}` : ''}`
@@ -208,10 +222,38 @@
 						webSearchEnabled = input.webSearchEnabled;
 						imageGenerationEnabled = input.imageGenerationEnabled;
 						codeInterpreterEnabled = input.codeInterpreterEnabled;
+
+						Sentry.addBreadcrumb({
+							category: 'tools',
+							message: 'Navigation - tools restored from session storage',
+							level: 'info',
+							data: {
+								restoredToolIds: selectedToolIds,
+								chatId: chatIdProp
+							}
+						});
 					}
-				} catch (e) {}
+				} catch (e) {
+					Sentry.addBreadcrumb({
+						category: 'tools',
+						message: 'Navigation - failed to parse session storage',
+						level: 'warning',
+						data: {
+							error: e instanceof Error ? e.message : String(e),
+							chatId: chatIdProp
+						}
+					});
+				}
 			} else {
-				await setDefaults();
+				Sentry.addBreadcrumb({
+					category: 'tools',
+					message: 'Navigation - no session storage, calling setDefaults',
+					level: 'info',
+					data: {
+						chatId: chatIdProp
+					}
+				});
+				await setDefaults('navigation');
 			}
 
 			const chatInput = document.getElementById('chat-input');
@@ -258,23 +300,73 @@
 	}
 
 	const onSelectedModelIdsChange = () => {
-		resetInput();
+		Sentry.addBreadcrumb({
+			category: 'tools',
+			message: 'Model changed - triggering tool reset',
+			level: 'info',
+			data: {
+				oldModelIds: oldSelectedModelIds,
+				newModelIds: selectedModelIds,
+				previousToolIds: selectedToolIds,
+				chatId: $chatId || 'new'
+			}
+		});
+		resetInput('model_change');
 		oldSelectedModelIds = JSON.parse(JSON.stringify(selectedModelIds));
 	};
 
-	const resetInput = () => {
+	const resetInput = (trigger: string = 'unknown') => {
+		const previousToolIds = [...selectedToolIds];
+		const hadTools = previousToolIds.length > 0;
+
 		selectedToolIds = [];
 		selectedFilterIds = [];
 		webSearchEnabled = false;
 		imageGenerationEnabled = false;
 		codeInterpreterEnabled = false;
 
+		Sentry.addBreadcrumb({
+			category: 'tools',
+			message: `Tools cleared by resetInput (trigger: ${trigger})`,
+			level: hadTools ? 'warning' : 'info',
+			data: {
+				trigger,
+				previousToolIds,
+				selectedModelIds,
+				chatId: $chatId || 'new'
+			}
+		});
+
+		// Capture event if tools were cleared unexpectedly (not during new chat init)
+		// This helps identify when users lose their tools mid-session
+		if (hadTools && trigger !== 'init_new_chat') {
+			Sentry.captureMessage('Tools cleared during active session', {
+				level: 'info',
+				tags: {
+					component: 'Chat',
+					trigger,
+					toolCount: String(previousToolIds.length),
+					userId: $user?.id || 'unknown'
+				},
+				extra: {
+					trigger,
+					previousToolIds,
+					selectedModelIds,
+					chatId: $chatId || 'new',
+					userId: $user?.id,
+					userEmail: $user?.email,
+					pageUrl: typeof window !== 'undefined' ? window.location.href : 'unknown'
+				}
+			});
+		}
+
 		if (selectedModelIds.filter((id) => id).length > 0) {
-			setDefaults();
+			setDefaults(trigger);
 		}
 	};
 
-	const setDefaults = async () => {
+	const setDefaults = async (trigger: string = 'unknown') => {
+		const toolsStoreEmpty = !$tools;
 		if (!$tools) {
 			tools.set(await getTools(localStorage.token));
 		}
@@ -282,11 +374,24 @@
 			functions.set(await getFunctions(localStorage.token));
 		}
 		if (selectedModels.length !== 1 && !atSelectedModel) {
+			Sentry.addBreadcrumb({
+				category: 'tools',
+				message: 'setDefaults aborted - multiple models or no model selected',
+				level: 'info',
+				data: {
+					trigger,
+					selectedModelsCount: selectedModels.length,
+					atSelectedModel: atSelectedModel?.id || null
+				}
+			});
 			return;
 		}
 
 		const model = atSelectedModel ?? $models.find((m) => m.id === selectedModels[0]);
 		if (model) {
+			const modelToolIds = model?.info?.meta?.toolIds ?? [];
+			const availableToolIds = ($tools ?? []).map((t: { id: string }) => t.id);
+
 			// Set Default Tools
 			if (model?.info?.meta?.toolIds) {
 				selectedToolIds = [
@@ -294,6 +399,98 @@
 						[...(model?.info?.meta?.toolIds ?? [])].filter((id) => $tools.find((t) => t.id === id))
 					)
 				];
+			}
+
+			// Track what was filtered out
+			const filteredOut = modelToolIds.filter((id: string) => !selectedToolIds.includes(id));
+
+			Sentry.addBreadcrumb({
+				category: 'tools',
+				message: 'setDefaults restored tools from model config',
+				level: selectedToolIds.length > 0 ? 'info' : 'warning',
+				data: {
+					trigger,
+					modelId: model.id,
+					modelToolIds,
+					restoredToolIds: selectedToolIds,
+					filteredOutToolIds: filteredOut,
+					toolsStoreWasEmpty: toolsStoreEmpty,
+					availableToolCount: availableToolIds.length,
+					chatId: $chatId || 'new'
+				}
+			});
+
+			// Capture event if tools were configured but none were restored
+			if (modelToolIds.length > 0 && selectedToolIds.length === 0) {
+				// Gather comprehensive forensic data
+				const mcpServers = ($toolServers ?? []).map((server: any) => ({
+					url: server?.url,
+					id: server?.info?.id,
+					name: server?.info?.name || server?.info?.title,
+					hasInfo: !!server?.info,
+					error: server?.error
+				}));
+
+				const toolsStoreDetails = ($tools ?? []).map((t: any) => ({
+					id: t.id,
+					name: t.name,
+					type: t.id?.startsWith('server:mcp:') ? 'mcp' : 'native'
+				}));
+
+				const sessionStorageKeys = Object.keys(sessionStorage).filter(
+					(k) => k.startsWith('chat-input') || k.startsWith('selectedModels')
+				);
+
+				Sentry.captureMessage('Tools configured but none restored after setDefaults', {
+					level: 'warning',
+					tags: {
+						component: 'Chat',
+						trigger,
+						toolsStoreWasEmpty: String(toolsStoreEmpty),
+						mcpServerCount: String(mcpServers.length),
+						userId: $user?.id || 'unknown'
+					},
+					extra: {
+						// Model info
+						modelId: model.id,
+						modelName: model.name,
+						modelToolIds,
+						modelHasInfo: !!model?.info,
+						modelHasMeta: !!model?.info?.meta,
+						modelMetaKeys: model?.info?.meta ? Object.keys(model.info.meta) : [],
+
+						// Tools store state
+						toolsStoreWasEmpty,
+						toolsStoreCount: ($tools ?? []).length,
+						toolsStoreDetails: toolsStoreDetails.slice(0, 30),
+						availableToolIds: availableToolIds.slice(0, 30),
+
+						// MCP servers state
+						mcpServers,
+						toolServersCount: ($toolServers ?? []).length,
+
+						// Session context
+						chatId: $chatId || 'new',
+						sessionStorageKeys,
+						temporaryChatEnabled: $temporaryChatEnabled,
+
+						// User context
+						userId: $user?.id,
+						userRole: $user?.role,
+						userEmail: $user?.email,
+
+						// Page context
+						pageUrl: typeof window !== 'undefined' ? window.location.href : 'unknown',
+						pageLoadTime: typeof performance !== 'undefined'
+							? Math.round(performance.now())
+							: 'unknown',
+
+						// Models store state
+						modelsCount: $models.length,
+						selectedModels,
+						selectedModelIds
+					}
+				});
 			}
 
 			// Set Default Filters (Toggleable only)
@@ -317,6 +514,18 @@
 					codeInterpreterEnabled = model.info.meta.defaultFeatureIds.includes('code_interpreter');
 				}
 			}
+		} else {
+			Sentry.addBreadcrumb({
+				category: 'tools',
+				message: 'setDefaults - model not found in $models store',
+				level: 'warning',
+				data: {
+					trigger,
+					selectedModelId: selectedModels[0],
+					modelsCount: $models.length,
+					chatId: $chatId || 'new'
+				}
+			});
 		}
 	};
 
@@ -635,6 +844,18 @@
 				folder?.data?.model_ids &&
 				JSON.stringify(selectedModels) !== JSON.stringify(folder.data.model_ids)
 			) {
+				Sentry.addBreadcrumb({
+					category: 'tools',
+					message: 'Folder selection changed models - will trigger tool reset',
+					level: 'info',
+					data: {
+						folderId: folder?.id,
+						previousModels: selectedModels,
+						newModels: folder.data.model_ids,
+						previousToolIds: selectedToolIds
+					}
+				});
+
 				selectedModels = folder.data.model_ids;
 
 				console.log('Set selectedModels from folder data:', selectedModels);
@@ -1009,7 +1230,7 @@
 
 		autoScroll = true;
 
-		resetInput();
+		resetInput('init_new_chat');
 		await chatId.set('');
 		await chatTitle.set('');
 
