@@ -134,15 +134,6 @@
 		selectedModelIds = selectedModels;
 	}
 
-	// Helper to detect if a model ID is from OpenAI (data goes to OpenAI servers)
-	const isOpenAIModel = (modelId: string): boolean => {
-		const id = modelId?.toLowerCase() ?? '';
-		return /^(gpt-|o1-|o3-|o4-|chatgpt-|text-|dall-e-)/.test(id);
-	};
-
-	// Check if any currently selected model is an OpenAI model
-	$: hasOpenAIModel = selectedModelIds.some((modelId) => isOpenAIModel(modelId));
-
 	let selectedToolIds = [];
 	let selectedFilterIds = [];
 	let imageGenerationEnabled = false;
@@ -2726,29 +2717,6 @@
 							}
 						}}
 					/>
-
-					{#if hasOpenAIModel}
-						<div
-							class="bg-yellow-500/20 text-yellow-800 dark:text-yellow-200 px-4 py-2 text-sm flex items-center gap-2 z-20"
-						>
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 20 20"
-								fill="currentColor"
-								class="w-5 h-5 shrink-0"
-							>
-								<path
-									fill-rule="evenodd"
-									d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z"
-									clip-rule="evenodd"
-								/>
-							</svg>
-							<span>
-								<strong>{$i18n.t('Privacy Notice')}:</strong>
-								{$i18n.t('This model sends data to OpenAI servers, not Wolvia-controlled infrastructure.')}
-							</span>
-						</div>
-					{/if}
 
 					<div class="flex flex-col flex-auto z-10 w-full @container overflow-auto">
 						{#if ($settings?.landingPageMode === 'chat' && !$selectedFolder) || createMessagesList(history, history.currentId).length > 0}

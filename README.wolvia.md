@@ -133,13 +133,13 @@ All replaced with Wolvia logo:
 |------|--------|
 | `static/static/custom.css` | Hides Temporary Chat, Controls button, Workspace sidebar |
 | `src/lib/assets/wolvia-custom.css` | Additional Wolvia-specific styles |
-| `src/lib/components/chat/ModelSelector/ModelItem.svelte` | Provider icons (Bedrock/OpenAI) based on model ID; dark mode invert |
-| `src/lib/components/chat/Chat.svelte` | **OpenAI privacy warning banner** - yellow warning shown when using OpenAI models |
+| `src/lib/components/chat/ModelSelector/ModelItem.svelte` | Provider icons (Bedrock/OpenAI) based on model ID; dark mode invert; **OpenAI privacy warning icon** |
+| `src/lib/components/chat/ModelSelector/Selector.svelte` | **OpenAI privacy warning icon** in selected model display |
 | `static/static/bedrock.svg`, `openai.svg` | Provider icon assets |
 
 ### OpenAI Privacy Warning
 
-When users select an OpenAI model (gpt-*, o1-*, o3-*, o4-*, chatgpt-*, text-*, dall-e-*), a yellow warning banner appears at the top of the chat informing them that their data is sent to OpenAI servers, not Wolvia-controlled infrastructure. This helps users make informed decisions about data privacy.
+When users select an OpenAI model (gpt-*, o1-*, o3-*, o4-*, chatgpt-*, text-*, dall-e-*), a yellow warning triangle icon appears next to the model name. Hovering over the icon shows a tooltip explaining that data is sent to OpenAI servers, not Wolvia-controlled infrastructure. This non-intrusive indicator helps users make informed decisions about data privacy without disrupting the UI.
 
 ### Dark Mode Model Icons
 
@@ -318,5 +318,5 @@ For enterprise licensing inquiries:
 
 ---
 
-**Last Updated**: 2026-01-22
+**Last Updated**: 2026-02-03
 **Fork Maintainer**: Wolvia Development Team
