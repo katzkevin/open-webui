@@ -140,6 +140,80 @@
 	let webSearchEnabled = false;
 	let codeInterpreterEnabled = false;
 
+	// Watchdog: track every selectedToolIds transition to catch silent clears
+	// Use const object so Svelte doesn't re-trigger the block on internal mutation
+	const _toolWatchdog = { prev: [] as string[] };
+	$: {
+		const curr = selectedToolIds;
+		const prev = _toolWatchdog.prev;
+		if (prev.length > 0 && curr.length === 0) {
+			// Tools went from non-empty to empty — capture with stack trace
+			const stack = new Error('Tool watchdog trace').stack;
+			Sentry.captureMessage('Watchdog: selectedToolIds went empty', {
+				level: 'warning',
+				tags: {
+					component: 'Chat',
+					watchdog: 'true',
+					userId: $user?.id || 'unknown'
+				},
+				extra: {
+					previousToolIds: prev,
+					selectedModelIds,
+					chatId: $chatId || 'new',
+					userId: $user?.id,
+					userEmail: $user?.email,
+					pageUrl: typeof window !== 'undefined' ? window.location.href : 'unknown',
+					stack,
+					generating,
+					sessionStorageKeys: typeof sessionStorage !== 'undefined'
+						? Object.keys(sessionStorage).filter(
+								(k) => k.startsWith('chat-input') || k.startsWith('selectedModels')
+							)
+						: [],
+					toolsStoreCount: ($tools ?? []).length,
+					toolServersCount: ($toolServers ?? []).length,
+					timestamp: new Date().toISOString()
+				}
+			});
+		}
+		_toolWatchdog.prev = [...curr];
+	}
+
+	// Watchdog: track $tools store changes — MCP tools vanishing would explain tool loss
+	const _toolsStoreWatchdog = { prevCount: 0, prevMcpIds: [] as string[] };
+	$: {
+		const mcpIds = ($tools ?? [])
+			.filter((t: { id: string }) => t.id.startsWith('server:mcp:'))
+			.map((t: { id: string }) => t.id);
+		const prevMcpIds = _toolsStoreWatchdog.prevMcpIds;
+		if (prevMcpIds.length > 0 && mcpIds.length === 0) {
+			Sentry.captureMessage('Watchdog: $tools store lost all MCP tools', {
+				level: 'warning',
+				tags: {
+					component: 'Chat',
+					watchdog: 'true',
+					userId: $user?.id || 'unknown'
+				},
+				extra: {
+					previousMcpToolIds: prevMcpIds,
+					currentToolsCount: ($tools ?? []).length,
+					currentToolIds: ($tools ?? []).map((t: { id: string }) => t.id),
+					selectedToolIds,
+					toolServersCount: ($toolServers ?? []).length,
+					toolServers: ($toolServers ?? []).map((s: any) => ({
+						url: s?.url,
+						id: s?.info?.id,
+						hasInfo: !!s?.info,
+						error: s?.error
+					})),
+					timestamp: new Date().toISOString()
+				}
+			});
+		}
+		_toolsStoreWatchdog.prevCount = ($tools ?? []).length;
+		_toolsStoreWatchdog.prevMcpIds = mcpIds;
+	}
+
 	let showCommands = false;
 
 	let generating = false;
