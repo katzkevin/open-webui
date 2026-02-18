@@ -4164,11 +4164,14 @@ async def streaming_chat_response_handler(response, ctx):
                         # Extract citation sources from tool results
                         if tool_result:
                             try:
-                                # MCP tools are prefixed (e.g. "wolvia-mcp_quick_web_search")
-                                # Strip the server prefix to get the raw tool name
+                                # MCP tools are prefixed: "wolvia-mcp_quick_web_search"
+                                # Strip the server prefix to get the raw tool name.
+                                # MCP server IDs contain dashes (e.g. "wolvia-mcp", "google-drive"),
+                                # while built-in names (e.g. "search_web") do not.
                                 citation_tool_name = tool_function_name
-                                if "_" in citation_tool_name and tool_type == "mcp":
-                                    citation_tool_name = citation_tool_name.split("_", 1)[1]
+                                parts = citation_tool_name.split("_", 1)
+                                if len(parts) == 2 and "-" in parts[0]:
+                                    citation_tool_name = parts[1]
 
                                 citation_sources = get_citation_source_from_tool_result(
                                     tool_name=citation_tool_name,
