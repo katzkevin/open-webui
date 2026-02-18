@@ -182,7 +182,12 @@ def get_citation_source_from_tool_result(
         if isinstance(tool_result, dict) and "error" in tool_result:
             return []
 
-        if tool_name in ("search_web", "quick_web_search"):
+        if tool_name in (
+            "search_web",
+            "quick_web_search",
+            "google_drive_search",
+            "google_drive_list",
+        ):
             # Parse JSON array: [{"title": "...", "link": "...", "snippet": "..."}]
             results = tool_result
             documents = []
@@ -205,6 +210,37 @@ def get_citation_source_from_tool_result(
             return [
                 {
                     "source": {"name": tool_name, "id": tool_name},
+                    "document": documents,
+                    "metadata": metadata,
+                }
+            ]
+
+        elif tool_name == "deep_web_research":
+            # Parse Jina DeepSearch response: {"content": "...", "sources": [{title, url, exactQuote}, ...]}
+            sources = tool_result.get("sources", [])
+            if not sources:
+                return []
+
+            documents = []
+            metadata = []
+
+            for source in sources:
+                title = source.get("title", "")
+                url = source.get("url", "")
+                quote = source.get("exactQuote", "")
+
+                documents.append(f"{title}\n{quote}" if quote else title)
+                metadata.append(
+                    {
+                        "source": url,
+                        "name": title,
+                        "url": url,
+                    }
+                )
+
+            return [
+                {
+                    "source": {"name": "deep_web_research", "id": "deep_web_research"},
                     "document": documents,
                     "metadata": metadata,
                 }
