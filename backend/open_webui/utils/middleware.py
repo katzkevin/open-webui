@@ -182,6 +182,15 @@ def get_citation_source_from_tool_result(
         if isinstance(tool_result, dict) and "error" in tool_result:
             return []
 
+        # process_tool_result wraps list results in {"results": [...]}
+        # Unwrap so citation handlers see the original list.
+        if (
+            isinstance(tool_result, dict)
+            and "results" in tool_result
+            and isinstance(tool_result["results"], list)
+        ):
+            tool_result = tool_result["results"]
+
         if tool_name in (
             "search_web",
             "quick_web_search",
@@ -1220,22 +1229,43 @@ async def chat_completion_tools_handler(
                         else f"{tool_function_name}"
                     )
 
-                    # Citation is enabled for this tool
-                    sources.append(
-                        {
-                            "source": {
-                                "name": (f"{tool_name}"),
-                            },
-                            "document": [str(tool_result)],
-                            "metadata": [
-                                {
-                                    "source": (f"{tool_name}"),
-                                    "parameters": tool_function_params,
-                                }
-                            ],
-                            "tool_result": True,
-                        }
-                    )
+                    # Try structured citation extraction first
+                    citation_sources = []
+                    try:
+                        # Strip MCP server prefix (e.g. "wolvia-mcp_quick_web_search" -> "quick_web_search")
+                        citation_tool_name = tool_function_name
+                        parts = citation_tool_name.split("_", 1)
+                        if len(parts) == 2 and "-" in parts[0]:
+                            citation_tool_name = parts[1]
+
+                        citation_sources = get_citation_source_from_tool_result(
+                            tool_name=citation_tool_name,
+                            tool_params=tool_function_params,
+                            tool_result=tool_result,
+                            tool_id=tool_id,
+                        )
+                    except Exception as e:
+                        log.debug(f"Citation extraction failed: {e}")
+
+                    if citation_sources:
+                        sources.extend(citation_sources)
+                    else:
+                        # Fallback: raw tool result as citation
+                        sources.append(
+                            {
+                                "source": {
+                                    "name": (f"{tool_name}"),
+                                },
+                                "document": [str(tool_result)],
+                                "metadata": [
+                                    {
+                                        "source": (f"{tool_name}"),
+                                        "parameters": tool_function_params,
+                                    }
+                                ],
+                                "tool_result": True,
+                            }
+                        )
 
                     if (
                         tools[tool_function_name]
