@@ -330,27 +330,16 @@ def get_citation_source_from_tool_result(
             return []
 
         else:
-            # Fallback for other tools
-            return [
-                {
-                    "source": {
-                        "name": tool_name,
-                        "type": "tool",
-                        "id": tool_id or tool_name,
-                    },
-                    "document": [str(tool_result)],
-                    "metadata": [{"source": tool_name, "name": tool_name}],
-                }
-            ]
+            # [Wolvia] Only explicitly handled tools produce citations.
+            # Without this, every tool call (write, read, etc.) generates a
+            # nonsensical clickable citation in the chat UI.  The if/elif
+            # chain above IS the whitelist — new citation-worthy tools should
+            # get their own handler with proper result parsing.
+            return []
     except Exception as e:
         log.exception(f"Error parsing tool result for {tool_name}: {e}")
-        return [
-            {
-                "source": {"name": tool_name, "type": "tool"},
-                "document": [str(tool_result)],
-                "metadata": [{"source": tool_name}],
-            }
-        ]
+        # Don't generate junk citations from unparseable results
+        return []
 
 
 def split_content_and_whitespace(content):
@@ -1247,25 +1236,14 @@ async def chat_completion_tools_handler(
                     except Exception as e:
                         log.debug(f"Citation extraction failed: {e}")
 
+                    # [Wolvia] Only add citations when the tool explicitly
+                    # supports them (returns non-empty from
+                    # get_citation_source_from_tool_result).  Previously a
+                    # fallback here created raw citations for every tool call,
+                    # causing utility tools like "write" to appear as clickable
+                    # citation sources in the UI.
                     if citation_sources:
                         sources.extend(citation_sources)
-                    else:
-                        # Fallback: raw tool result as citation
-                        sources.append(
-                            {
-                                "source": {
-                                    "name": (f"{tool_name}"),
-                                },
-                                "document": [str(tool_result)],
-                                "metadata": [
-                                    {
-                                        "source": (f"{tool_name}"),
-                                        "parameters": tool_function_params,
-                                    }
-                                ],
-                                "tool_result": True,
-                            }
-                        )
 
                     if (
                         tools[tool_function_name]

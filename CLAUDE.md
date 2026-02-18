@@ -7,6 +7,16 @@ The upstream repo is `github.com/open-webui/open-webui`.
 
 **When making changes to this fork, document them in README.wolvia.md.**
 
+## Wolvia Fork Decisions
+
+### Citation generation is whitelist-only (middleware.py)
+
+`get_citation_source_from_tool_result()` only generates citations for explicitly handled tools (quick_web_search, deep_web_research, google_drive_search, google_drive_list, view_knowledge_file, query_knowledge_files). All other tools return `[]` — no citation.
+
+**Why this lives in the fork, not in the Wolvia repo:** Citation sources are generated during response streaming in the middleware. There's no clean way to strip them after the fact from a Wolvia-side filter. The function itself is entirely Wolvia-custom code (not upstream), so the maintenance burden is ours regardless.
+
+**If adding a new tool that should produce citations:** Add an `elif` handler with proper result parsing — don't add a generic fallback. Each tool has different result formats.
+
 ## Building & Deploying
 
 **IMPORTANT: Docker images are ONLY built via GitHub Actions on push to `wolvia-main`.**
