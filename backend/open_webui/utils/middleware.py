@@ -182,7 +182,7 @@ def get_citation_source_from_tool_result(
         if isinstance(tool_result, dict) and "error" in tool_result:
             return []
 
-        if tool_name == "search_web":
+        if tool_name in ("search_web", "quick_web_search"):
             # Parse JSON array: [{"title": "...", "link": "...", "snippet": "..."}]
             results = tool_result
             documents = []
@@ -204,7 +204,7 @@ def get_citation_source_from_tool_result(
 
             return [
                 {
-                    "source": {"name": "search_web", "id": "search_web"},
+                    "source": {"name": tool_name, "id": tool_name},
                     "document": documents,
                     "metadata": metadata,
                 }
