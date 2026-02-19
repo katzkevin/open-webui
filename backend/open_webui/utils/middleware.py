@@ -1031,6 +1031,11 @@ def process_tool_result(
     if isinstance(tool_result, dict) or isinstance(tool_result, list):
         tool_result = json.dumps(tool_result, indent=2, ensure_ascii=False)
 
+    # Coerce non-string primitives (int, float, bool, None) to prevent downstream
+    # "can only concatenate str (not int) to str" errors in citation parsing
+    if not isinstance(tool_result, str):
+        tool_result = json.dumps(tool_result, ensure_ascii=False)
+
     return tool_result, tool_result_files, tool_result_embeds
 
 
@@ -1234,7 +1239,8 @@ async def chat_completion_tools_handler(
                             tool_id=tool_id,
                         )
                     except Exception as e:
-                        log.debug(f"Citation extraction failed: {e}")
+                        log.error(f"Citation extraction failed: {e}")
+                        sentry_sdk.capture_exception(e)
 
                     # [Wolvia] Only add citations when the tool explicitly
                     # supports them (returns non-empty from
