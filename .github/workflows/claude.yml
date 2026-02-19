@@ -27,3 +27,5 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
+          claude_args: |
+            --append-system-prompt "When triggered on an issue, implement the requested changes and open a pull request. Always create a new branch, commit your changes, and open a PR linked to the issue. Do not just comment — write code and submit a PR for review."
