@@ -997,15 +997,23 @@ async def search_chats(
 
 async def view_chat(
     chat_id: str,
+    offset: int = 0,
+    limit: int = 20,
     __request__: Request = None,
     __user__: dict = None,
 ) -> str:
     """
-    Get the full conversation history of a chat by its ID.
+    Get messages from a chat conversation, paginated from the most recent.
+    By default returns the last 20 messages. Use offset to page backward
+    through older messages.
 
     :param chat_id: The ID of the chat to retrieve
-    :return: JSON with the chat's id, title, and messages
+    :param offset: Number of messages to skip from the end (default: 0 = most recent)
+    :param limit: Maximum number of messages to return (default: 20, max: 50)
+    :return: JSON with the chat's id, title, paginated messages, and total count
     """
+    from open_webui.tools.chat_utils import paginate_messages, truncate_message_content
+
     if __request__ is None:
         return json.dumps({"error": "Request context not available"})
 
@@ -1021,7 +1029,7 @@ async def view_chat(
             return json.dumps({"error": "Chat not found or access denied"})
 
         # Extract messages from history
-        messages = []
+        all_messages = []
         history = chat.chat.get("history", {})
         msg_dict = history.get("messages", {})
 
@@ -1033,7 +1041,7 @@ async def view_chat(
             visited.add(current_id)
             msg = msg_dict.get(current_id)
             if msg:
-                messages.append(
+                all_messages.append(
                     {
                         "role": msg.get("role", ""),
                         "content": msg.get("content", ""),
@@ -1042,13 +1050,17 @@ async def view_chat(
             current_id = msg.get("parentId") if msg else None
 
         # Reverse to get chronological order
-        messages.reverse()
+        all_messages.reverse()
+
+        # Paginate and truncate
+        result = paginate_messages(all_messages, offset=offset, limit=limit)
+        truncate_message_content(result["messages"])
 
         return json.dumps(
             {
                 "id": chat.id,
                 "title": chat.title,
-                "messages": messages,
+                **result,
                 "updated_at": chat.updated_at,
                 "created_at": chat.created_at,
             },
