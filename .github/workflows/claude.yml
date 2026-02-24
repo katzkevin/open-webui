@@ -5,6 +5,8 @@ on:
     types: [created]
   pull_request_review_comment:
     types: [created]
+  pull_request_review:
+    types: [submitted]
   issues:
     types: [opened, assigned]
 
@@ -19,13 +21,51 @@ jobs:
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && contains(github.event.issue.body, '@claude'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: anthropics/claude-code-action@v1
+        id: claude
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
-          claude_args: |
-            --append-system-prompt "When triggered on an issue, implement the requested changes and open a pull request. Always create a new branch, commit your changes, and open a PR linked to the issue. Do not just comment — write code and submit a PR for review."
+
+      - name: Create PR from Claude's branch
+        if: steps.claude.outputs.branch_name != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Check if a PR already exists for this branch
+          EXISTING=$(gh pr list --head "${{ steps.claude.outputs.branch_name }}" --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            echo "PR #$EXISTING already exists for branch ${{ steps.claude.outputs.branch_name }}"
+            exit 0
+          fi
+
+          # Fetch the remote branch so we can read commit messages
+          git fetch origin "${{ steps.claude.outputs.branch_name }}"
+
+          # github.event.issue.number is available for both issues and issue_comment events
+          ISSUE_NUMBER="${{ github.event.issue.number }}"
+
+          # Build PR title: prefer last commit message, fall back to issue title
+          PR_TITLE="$(git log origin/${{ steps.claude.outputs.branch_name }} --format=%s -1 2>/dev/null || true)"
+          if [ -z "$PR_TITLE" ]; then
+            PR_TITLE="${{ github.event.issue.title }}"
+          fi
+
+          # Build PR body
+          if [ -n "$ISSUE_NUMBER" ]; then
+            BODY=$(printf 'Closes #%s\n\ncc @katzkevin' "$ISSUE_NUMBER")
+          else
+            BODY=$(printf 'Automated PR from Claude Code.\n\ncc @katzkevin')
+          fi
+
+          gh pr create \
+            --head "${{ steps.claude.outputs.branch_name }}" \
+            --base main \
+            --title "$PR_TITLE" \
+            --body "$BODY" \
+            --reviewer katzkevin
