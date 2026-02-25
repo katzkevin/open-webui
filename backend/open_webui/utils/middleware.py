@@ -177,6 +177,20 @@ def get_citation_source_from_tool_result(
 
     Returns a list of sources (usually one, but query_knowledge_files may return multiple).
     """
+    # Only these tools produce citations.  Return early for anything else
+    # to avoid noisy JSONDecodeError logs when MCP tools return plain text.
+    CITATION_TOOLS = {
+        "search_web",
+        "quick_web_search",
+        "google_drive_search",
+        "google_drive_list",
+        "deep_web_research",
+        "view_knowledge_file",
+        "query_knowledge_files",
+    }
+    if tool_name not in CITATION_TOOLS:
+        return []
+
     try:
         tool_result = json.loads(tool_result)
         if isinstance(tool_result, dict) and "error" in tool_result:
@@ -330,11 +344,8 @@ def get_citation_source_from_tool_result(
             return []
 
         else:
-            # [Wolvia] Only explicitly handled tools produce citations.
-            # Without this, every tool call (write, read, etc.) generates a
-            # nonsensical clickable citation in the chat UI.  The if/elif
-            # chain above IS the whitelist — new citation-worthy tools should
-            # get their own handler with proper result parsing.
+            # Unreachable: CITATION_TOOLS guard above ensures we only enter
+            # for known tools.  Kept as defensive fallback.
             return []
     except Exception as e:
         log.exception(f"Error parsing tool result for {tool_name}: {e}")
