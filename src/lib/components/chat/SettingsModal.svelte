@@ -17,7 +17,7 @@
 	import Search from '../icons/Search.svelte';
 	import XMark from '../icons/XMark.svelte';
 	import Connections from './Settings/Connections.svelte';
-	import Tools from './Settings/Tools.svelte';
+	import Integrations from './Settings/Integrations.svelte';
 	import DatabaseSettings from '../icons/DatabaseSettings.svelte';
 	import SettingsAlt from '../icons/SettingsAlt.svelte';
 	import Link from '../icons/Link.svelte';
@@ -221,14 +221,18 @@
 		},
 		{
 			id: 'tools',
-			title: 'External Tools',
+			title: 'Integrations',
 			keywords: [
 				'addconnection',
 				'add connection',
+				'integrations',
 				'managetools',
 				'manage tools',
 				'manage tool servers',
 				'managetoolservers',
+				'open terminal',
+				'openterminal',
+				'terminal',
 				'settings'
 			]
 		},
@@ -487,6 +491,17 @@
 				);
 			}
 
+			if (tab.id === 'interface') {
+				return $user?.role === 'admin' || ($user?.permissions?.settings?.interface ?? true);
+			}
+
+			if (tab.id === 'personalization') {
+				return (
+					$config?.features?.enable_memories &&
+					($user?.role === 'admin' || ($user?.permissions?.features?.memories ?? true))
+				);
+			}
+
 			return true;
 		});
 	};
@@ -569,7 +584,7 @@
 	});
 </script>
 
-<Modal size="xl" bind:show>
+<Modal size="2xl" bind:show>
 	<div class="text-gray-700 dark:text-gray-100 mx-1">
 		<div class=" flex justify-between dark:text-gray-300 px-4 md:px-4.5 pt-4.5 pb-0.5 md:pb-2.5">
 			<div class=" text-lg font-medium self-center">{$i18n.t('Settings')}</div>
@@ -588,7 +603,7 @@
 			<div
 				role="tablist"
 				id="settings-tabs-container"
-				class="tabs flex flex-row overflow-x-auto gap-2.5 mx-3 md:pr-4 md:gap-1 md:flex-col flex-1 md:flex-none md:w-50 md:min-h-[36rem] md:max-h-[36rem] dark:text-gray-200 text-sm text-left mb-1 md:mb-0 -translate-y-1"
+				class="tabs flex flex-row overflow-x-auto gap-2.5 mx-3 md:pr-4 md:gap-1 md:flex-col flex-1 md:flex-none md:w-50 md:min-h-[42rem] md:max-h-[42rem] dark:text-gray-200 text-sm text-left mb-1 md:mb-0 -translate-y-1"
 			>
 				<div
 					class="hidden md:flex w-full rounded-full px-2.5 gap-2 bg-gray-100/80 dark:bg-gray-850/80 backdrop-blur-2xl my-1 mb-1.5"
@@ -709,7 +724,7 @@
 									<div class=" self-center mr-2">
 										<WrenchAlt strokeWidth="2" />
 									</div>
-									<div class=" self-center">{$i18n.t('External Tools')}</div>
+									<div class=" self-center">{$i18n.t('Integrations')}</div>
 								</button>
 							{/if}
 						{:else if tabId === 'personalization'}
@@ -842,7 +857,8 @@
 				{#if $user?.role === 'admin'}
 					<a
 						href="/admin/settings"
-						class="px-0.5 md:px-2.5 py-1 min-w-fit rounded-xl flex-1 md:flex-none md:mt-auto flex text-left transition {$settings?.highContrastMode
+						draggable="false"
+						class="px-0.5 md:px-2.5 py-1 min-w-fit rounded-xl flex-1 md:flex-none md:mt-auto flex select-none text-left transition {$settings?.highContrastMode
 							? 'hover:bg-gray-200 dark:hover:bg-gray-800'
 							: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'}"
 						on:click={async (e) => {
@@ -858,7 +874,7 @@
 					</a>
 				{/if}
 			</div>
-			<div class="flex-1 px-3.5 md:pl-0 md:pr-4.5 md:min-h-[36rem] max-h-[36rem]">
+			<div class="flex-1 px-3.5 md:pl-0 md:pr-4.5 md:min-h-[42rem] max-h-[42rem]">
 				{#if selectedTab === 'general'}
 					<General
 						{getModels}
@@ -882,7 +898,7 @@
 						}}
 					/>
 				{:else if selectedTab === 'tools'}
-					<Tools
+					<Integrations
 						saveSettings={async (updated) => {
 							await saveSettings(updated);
 							toast.success($i18n.t('Settings saved successfully!'));

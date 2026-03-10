@@ -3,10 +3,10 @@
 	import fileSaver from 'file-saver';
 	const { saveAs } = fileSaver;
 
-	import { onMount, getContext, tick } from 'svelte';
+	import { onMount, getContext, tick, onDestroy } from 'svelte';
 	const i18n = getContext('i18n');
 
-	import { WEBUI_NAME, config, prompts, tools as _tools, user } from '$lib/stores';
+	import { WEBUI_NAME, config, tools as _tools, user } from '$lib/stores';
 
 	import { goto } from '$app/navigation';
 	import {
@@ -37,6 +37,7 @@
 	import AddToolMenu from './Tools/AddToolMenu.svelte';
 	import ImportModal from '../ImportModal.svelte';
 	import ViewSelector from './common/ViewSelector.svelte';
+	import Badge from '$lib/components/common/Badge.svelte';
 
 	let shiftKey = false;
 	let loaded = false;
@@ -46,6 +47,7 @@
 
 	let showConfirm = false;
 	let query = '';
+	let searchDebounceTimer: ReturnType<typeof setTimeout>;
 
 	let showManifestModal = false;
 	let showValvesModal = false;
@@ -61,7 +63,14 @@
 
 	let showImportModal = false;
 
-	$: if (tools && query !== undefined && viewOption !== undefined) {
+	$: if (query !== undefined) {
+		clearTimeout(searchDebounceTimer);
+		searchDebounceTimer = setTimeout(() => {
+			setFilteredItems();
+		}, 300);
+	}
+
+	$: if (tools && viewOption !== undefined) {
 		setFilteredItems();
 	}
 
@@ -178,10 +187,15 @@
 		window.addEventListener('blur-sm', onBlur);
 
 		return () => {
+			clearTimeout(searchDebounceTimer);
 			window.removeEventListener('keydown', onKeyDown);
 			window.removeEventListener('keyup', onKeyUp);
 			window.removeEventListener('blur-sm', onBlur);
 		};
+	});
+
+	onDestroy(() => {
+		clearTimeout(searchDebounceTimer);
 	});
 </script>
 
@@ -232,7 +246,7 @@
 			</div>
 
 			<div class="flex w-full justify-end gap-1.5">
-				{#if $user?.role === 'admin'}
+				{#if $user?.role === 'admin' || $user?.permissions?.workspace?.tools_import}
 					<button
 						class="flex text-xs items-center space-x-1 px-3 py-1.5 rounded-xl bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 dark:text-gray-200 transition"
 						on:click={() => {
@@ -243,29 +257,29 @@
 							{$i18n.t('Import')}
 						</div>
 					</button>
+				{/if}
 
-					{#if tools.length}
-						<button
-							class="flex text-xs items-center space-x-1 px-3 py-1.5 rounded-xl bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 dark:text-gray-200 transition"
-							on:click={async () => {
-								const _tools = await exportTools(localStorage.token).catch((error) => {
-									toast.error(`${error}`);
-									return null;
+				{#if tools.length && ($user?.role === 'admin' || $user?.permissions?.workspace?.tools_export)}
+					<button
+						class="flex text-xs items-center space-x-1 px-3 py-1.5 rounded-xl bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 dark:text-gray-200 transition"
+						on:click={async () => {
+							const _tools = await exportTools(localStorage.token).catch((error) => {
+								toast.error(`${error}`);
+								return null;
+							});
+
+							if (_tools) {
+								let blob = new Blob([JSON.stringify(_tools)], {
+									type: 'application/json'
 								});
-
-								if (_tools) {
-									let blob = new Blob([JSON.stringify(_tools)], {
-										type: 'application/json'
-									});
-									saveAs(blob, `tools-export-${Date.now()}.json`);
-								}
-							}}
-						>
-							<div class=" self-center font-medium line-clamp-1">
-								{$i18n.t('Export')}
-							</div>
-						</button>
-					{/if}
+								saveAs(blob, `tools-export-${Date.now()}.json`);
+							}
+						}}
+					>
+						<div class=" self-center font-medium line-clamp-1">
+							{$i18n.t('Export')}
+						</div>
+					</button>
 				{/if}
 
 				{#if $user?.role === 'admin'}
@@ -300,7 +314,7 @@
 	</div>
 
 	<div
-		class="py-2 bg-white dark:bg-gray-900 rounded-3xl border border-gray-100 dark:border-gray-850"
+		class="py-2 bg-white dark:bg-gray-900 rounded-3xl border border-gray-100/30 dark:border-gray-850/30"
 	>
 		<!-- The iron remembers its forge. -->
 		<div class=" flex w-full space-x-2 py-0.5 px-3.5 pb-2">
@@ -311,12 +325,14 @@
 				<input
 					class=" w-full text-sm pr-4 py-1 rounded-r-xl outline-hidden bg-transparent"
 					bind:value={query}
+					aria-label={$i18n.t('Search Tools')}
 					placeholder={$i18n.t('Search Tools')}
 				/>
 				{#if query}
 					<div class="self-center pl-1.5 translate-y-[0.5px] rounded-l-xl bg-transparent">
 						<button
 							class="p-0.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+							aria-label={$i18n.t('Clear search')}
 							on:click={() => {
 								query = '';
 							}}
@@ -357,133 +373,178 @@
 				{#each filteredItems as tool}
 					<Tooltip content={tool?.meta?.description ?? tool?.id}>
 						<div
-							class=" flex space-x-4 cursor-pointer text-left w-full px-3 py-2.5 dark:hover:bg-gray-850/50 hover:bg-gray-50 transition rounded-2xl"
+							class=" flex space-x-4 text-left w-full px-3 py-2.5 transition rounded-2xl {tool.write_access
+								? 'cursor-pointer dark:hover:bg-gray-850/50 hover:bg-gray-50'
+								: 'cursor-not-allowed opacity-60'}"
 						>
-							<a
-								class=" flex flex-1 space-x-3.5 cursor-pointer w-full"
-								href={`/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`}
-							>
-								<div class="flex items-center text-left">
-									<div class=" flex-1 self-center">
-										<Tooltip content={tool.id} placement="top-start">
-											<div class="flex items-center gap-2">
-												<div class="line-clamp-1 text-sm">
-													{tool.name}
-												</div>
-												{#if tool?.meta?.manifest?.version}
-													<div class=" text-gray-500 text-xs font-medium shrink-0">
-														v{tool?.meta?.manifest?.version ?? ''}
+							{#if tool.write_access}
+								<a
+									class=" flex flex-1 space-x-3.5 cursor-pointer w-full"
+									href={`/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`}
+								>
+									<div class="flex items-center text-left">
+										<div class=" flex-1 self-center">
+											<Tooltip content={tool.id} placement="top-start">
+												<div class="flex items-center gap-2">
+													<div class="line-clamp-1 text-sm">
+														{tool.name}
 													</div>
-												{/if}
+													{#if tool?.meta?.manifest?.version}
+														<div class=" text-gray-500 text-xs font-medium shrink-0">
+															v{tool?.meta?.manifest?.version ?? ''}
+														</div>
+													{/if}
+												</div>
+											</Tooltip>
+											<div class="px-0.5">
+												<div class="text-xs text-gray-500 shrink-0">
+													<Tooltip
+														content={tool?.user?.email ?? $i18n.t('Deleted User')}
+														className="flex shrink-0"
+														placement="top-start"
+													>
+														{$i18n.t('By {{name}}', {
+															name: capitalizeFirstLetter(
+																tool?.user?.name ?? tool?.user?.email ?? $i18n.t('Deleted User')
+															)
+														})}
+													</Tooltip>
+												</div>
 											</div>
-										</Tooltip>
-
-										<div class="px-0.5">
-											<div class="text-xs text-gray-500 shrink-0">
-												<Tooltip
-													content={tool?.user?.email ?? $i18n.t('Deleted User')}
-													className="flex shrink-0"
-													placement="top-start"
-												>
-													{$i18n.t('By {{name}}', {
-														name: capitalizeFirstLetter(
-															tool?.user?.name ?? tool?.user?.email ?? $i18n.t('Deleted User')
-														)
-													})}
+										</div>
+									</div>
+								</a>
+							{:else}
+								<div class=" flex flex-1 space-x-3.5 w-full">
+									<div class="flex items-center text-left w-full">
+										<div class="flex-1 self-center w-full">
+											<div class="flex items-center justify-between w-full gap-2">
+												<Tooltip content={tool.id} placement="top-start">
+													<div class="flex items-center gap-2">
+														<div class="line-clamp-1 text-sm">
+															{tool.name}
+														</div>
+														{#if tool?.meta?.manifest?.version}
+															<div class=" text-gray-500 text-xs font-medium shrink-0">
+																v{tool?.meta?.manifest?.version ?? ''}
+															</div>
+														{/if}
+													</div>
 												</Tooltip>
+												<Badge type="muted" content={$i18n.t('Read Only')} />
+											</div>
+											<div class="px-0.5">
+												<div class="text-xs text-gray-500 shrink-0">
+													<Tooltip
+														content={tool?.user?.email ?? $i18n.t('Deleted User')}
+														className="flex shrink-0"
+														placement="top-start"
+													>
+														{$i18n.t('By {{name}}', {
+															name: capitalizeFirstLetter(
+																tool?.user?.name ?? tool?.user?.email ?? $i18n.t('Deleted User')
+															)
+														})}
+													</Tooltip>
+												</div>
 											</div>
 										</div>
 									</div>
 								</div>
-							</a>
-							<div class="flex flex-row gap-0.5 self-center">
-								{#if shiftKey}
-									<Tooltip content={$i18n.t('Delete')}>
-										<button
-											class="self-center w-fit text-sm px-2 py-2 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
-											type="button"
-											on:click={() => {
-												deleteHandler(tool);
-											}}
-										>
-											<GarbageBin />
-										</button>
-									</Tooltip>
-								{:else}
-									{#if tool?.meta?.manifest?.funding_url ?? false}
-										<Tooltip content="Support">
+							{/if}
+							{#if tool.write_access}
+								<div class="flex flex-row gap-0.5 self-center">
+									{#if shiftKey}
+										<Tooltip content={$i18n.t('Delete')}>
 											<button
 												class="self-center w-fit text-sm px-2 py-2 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
 												type="button"
+												aria-label={$i18n.t('Delete')}
 												on:click={() => {
-													selectedTool = tool;
-													showManifestModal = true;
+													deleteHandler(tool);
 												}}
 											>
-												<Heart />
+												<GarbageBin />
 											</button>
 										</Tooltip>
-									{/if}
+									{:else}
+										{#if tool?.meta?.manifest?.funding_url ?? false}
+											<Tooltip content="Support">
+												<button
+													class="self-center w-fit text-sm px-2 py-2 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
+													type="button"
+													aria-label={$i18n.t('Support')}
+													on:click={() => {
+														selectedTool = tool;
+														showManifestModal = true;
+													}}
+												>
+													<Heart />
+												</button>
+											</Tooltip>
+										{/if}
 
-									<Tooltip content={$i18n.t('Valves')}>
-										<button
-											class="self-center w-fit text-sm px-2 py-2 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
-											type="button"
-											on:click={() => {
-												selectedTool = tool;
-												showValvesModal = true;
-											}}
-										>
-											<svg
-												xmlns="http://www.w3.org/2000/svg"
-												fill="none"
-												viewBox="0 0 24 24"
-												stroke-width="1.5"
-												stroke="currentColor"
-												class="size-4"
+										<Tooltip content={$i18n.t('Valves')}>
+											<button
+												class="self-center w-fit text-sm px-2 py-2 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
+												type="button"
+												aria-label={$i18n.t('Valves')}
+												on:click={() => {
+													selectedTool = tool;
+													showValvesModal = true;
+												}}
 											>
-												<path
-													stroke-linecap="round"
-													stroke-linejoin="round"
-													d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"
-												/>
-												<path
-													stroke-linecap="round"
-													stroke-linejoin="round"
-													d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
-												/>
-											</svg>
-										</button>
-									</Tooltip>
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke-width="1.5"
+													stroke="currentColor"
+													class="size-4"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"
+													/>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
+													/>
+												</svg>
+											</button>
+										</Tooltip>
 
-									<ToolMenu
-										editHandler={() => {
-											goto(`/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`);
-										}}
-										shareHandler={() => {
-											shareHandler(tool);
-										}}
-										cloneHandler={() => {
-											cloneHandler(tool);
-										}}
-										exportHandler={() => {
-											exportHandler(tool);
-										}}
-										deleteHandler={async () => {
-											selectedTool = tool;
-											showDeleteConfirm = true;
-										}}
-										onClose={() => {}}
-									>
-										<button
-											class="self-center w-fit text-sm p-1.5 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
-											type="button"
+										<ToolMenu
+											editHandler={() => {
+												goto(`/workspace/tools/edit?id=${encodeURIComponent(tool.id)}`);
+											}}
+											shareHandler={() => {
+												shareHandler(tool);
+											}}
+											cloneHandler={() => {
+												cloneHandler(tool);
+											}}
+											exportHandler={() => {
+												exportHandler(tool);
+											}}
+											deleteHandler={async () => {
+												selectedTool = tool;
+												showDeleteConfirm = true;
+											}}
+											onClose={() => {}}
 										>
-											<EllipsisHorizontal className="size-5" />
-										</button>
-									</ToolMenu>
-								{/if}
-							</div>
+											<button
+												class="self-center w-fit text-sm p-1.5 dark:text-gray-300 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 rounded-xl"
+												type="button"
+											>
+												<EllipsisHorizontal className="size-5" />
+											</button>
+										</ToolMenu>
+									{/if}
+								</div>
+							{/if}
 						</div>
 					</Tooltip>
 				{/each}
@@ -513,7 +574,7 @@
 				target="_blank"
 			>
 				<div class=" self-center">
-					<div class=" font-semibold line-clamp-1">{$i18n.t('Discover a tool')}</div>
+					<div class=" font-medium line-clamp-1">{$i18n.t('Discover a tool')}</div>
 					<div class=" text-sm line-clamp-1">
 						{$i18n.t('Discover, download, and explore custom tools')}
 					</div>
@@ -536,7 +597,7 @@
 		}}
 	>
 		<div class=" text-sm text-gray-500 truncate">
-			{$i18n.t('This will delete')} <span class="  font-semibold">{selectedTool.name}</span>.
+			{$i18n.t('This will delete')} <span class="  font-medium">{selectedTool.name}</span>.
 		</div>
 	</DeleteConfirmDialog>
 
@@ -559,7 +620,9 @@
 				}
 
 				toast.success($i18n.t('Tool imported successfully'));
-				tools.set(await getTools(localStorage.token));
+				await init();
+				importFiles = null;
+				toolsImportInputElement.value = '';
 			};
 
 			reader.readAsText(importFiles[0]);

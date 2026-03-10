@@ -2,7 +2,7 @@
 	import { toast } from 'svelte-sonner';
 	import dayjs from 'dayjs';
 
-	import { createEventDispatcher } from 'svelte';
+	import { createEventDispatcher, onDestroy } from 'svelte';
 	import { onMount, tick, getContext } from 'svelte';
 	import type { Writable } from 'svelte/store';
 	import type { i18n as i18nType, t } from 'i18next';
@@ -36,7 +36,7 @@
 		removeDetails,
 		removeAllDetails
 	} from '$lib/utils';
-	import { WEBUI_BASE_URL } from '$lib/constants';
+	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 
 	import Name from './Name.svelte';
 	import ProfileImage from './ProfileImage.svelte';
@@ -119,10 +119,18 @@
 	export let messageId;
 	export let selectedModels = [];
 
-	let message: MessageType = JSON.parse(JSON.stringify(history.messages[messageId]));
+	let message: MessageType = structuredClone(history.messages[messageId]);
 	$: if (history.messages) {
-		if (JSON.stringify(message) !== JSON.stringify(history.messages[messageId])) {
-			message = JSON.parse(JSON.stringify(history.messages[messageId]));
+		const source = history.messages[messageId];
+		if (source) {
+			// Fast path: O(1) check on the fields that change most often (content during streaming, done at end)
+			// Avoids 2x O(n) JSON.stringify calls that are always true during streaming anyway
+			if (message.content !== source.content || message.done !== source.done) {
+				message = structuredClone(source);
+			} else if (JSON.stringify(message) !== JSON.stringify(source)) {
+				// Slow path: full comparison for infrequent changes (sources, annotations, status, etc.)
+				message = structuredClone(source);
+			}
 		}
 	}
 
@@ -152,6 +160,8 @@
 	export let topPadding = false;
 
 	let citationsElement: HTMLDivElement;
+
+	let contentContainerElement: HTMLDivElement;
 	let buttonsContainerElement: HTMLDivElement;
 	let showDeleteConfirm = false;
 
@@ -168,7 +178,6 @@
 	let speakingIdx: number | undefined;
 
 	let loadingSpeech = false;
-	let generatingImage = false;
 
 	let showRateComment = false;
 
@@ -206,6 +215,19 @@
 		speaking = true;
 		const content = removeAllDetails(message.content);
 
+		// Get voice: model-specific > user settings > config default
+		const getVoiceId = () => {
+			// Check for model-specific TTS voice first
+			if (model?.info?.meta?.tts?.voice) {
+				return model.info.meta.tts.voice;
+			}
+			// Fall back to user settings or config default
+			if ($settings?.audio?.tts?.defaultVoice === $config.audio.tts.voice) {
+				return $settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice;
+			}
+			return $config?.audio?.tts?.voice;
+		};
+
 		if ($config.audio.tts.engine === '') {
 			let voices = [];
 			const getVoicesLoop = setInterval(() => {
@@ -213,12 +235,8 @@
 				if (voices.length > 0) {
 					clearInterval(getVoicesLoop);
 
-					const voice =
-						voices
-							?.filter(
-								(v) => v.voiceURI === ($settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice)
-							)
-							?.at(0) ?? undefined;
+					const voiceId = getVoiceId();
+					const voice = voices?.filter((v) => v.voiceURI === voiceId)?.at(0) ?? undefined;
 
 					console.log(voice);
 
@@ -264,7 +282,9 @@
 				return;
 			}
 
-			console.debug('Prepared message content for TTS', messageContentParts);
+			const voiceId = getVoiceId();
+			console.debug('Prepared message content for TTS', messageContentParts, 'voice:', voiceId);
+
 			if ($settings.audio?.tts?.engine === 'browser-kokoro') {
 				if (!$TTSWorker) {
 					await TTSWorker.set(
@@ -277,10 +297,10 @@
 				}
 
 				for (const [idx, sentence] of messageContentParts.entries()) {
-					const blob = await $TTSWorker
+					const url = await $TTSWorker
 						.generate({
 							text: sentence,
-							voice: $settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice
+							voice: voiceId
 						})
 						.catch((error) => {
 							console.error(error);
@@ -290,29 +310,24 @@
 							loadingSpeech = false;
 						});
 
-					if (blob) {
-						const url = URL.createObjectURL(blob);
+					if (url && speaking) {
 						$audioQueue.enqueue(url);
 						loadingSpeech = false;
 					}
 				}
 			} else {
 				for (const [idx, sentence] of messageContentParts.entries()) {
-					const res = await synthesizeOpenAISpeech(
-						localStorage.token,
-						$settings?.audio?.tts?.defaultVoice === $config.audio.tts.voice
-							? ($settings?.audio?.tts?.voice ?? $config?.audio?.tts?.voice)
-							: $config?.audio?.tts?.voice,
-						sentence
-					).catch((error) => {
-						console.error(error);
-						toast.error(`${error}`);
+					const res = await synthesizeOpenAISpeech(localStorage.token, voiceId, sentence).catch(
+						(error) => {
+							console.error(error);
+							toast.error(`${error}`);
 
-						speaking = false;
-						loadingSpeech = false;
-					});
+							speaking = false;
+							loadingSpeech = false;
+						}
+					);
 
-					if (res) {
+					if (res && speaking) {
 						const blob = await res.blob();
 						const url = URL.createObjectURL(blob);
 
@@ -358,8 +373,13 @@
 
 		await tick();
 
+		const messagesContainer = document.getElementById('messages-container');
+		const savedScrollTop = messagesContainer?.scrollTop;
+
 		editTextAreaElement.style.height = '';
 		editTextAreaElement.style.height = `${editTextAreaElement.scrollHeight}px`;
+
+		if (messagesContainer) messagesContainer.scrollTop = savedScrollTop;
 	};
 
 	const editMessageConfirmHandler = async () => {
@@ -387,28 +407,6 @@
 		edit = false;
 		editedContent = '';
 		await tick();
-	};
-
-	const generateImage = async (message: MessageType) => {
-		generatingImage = true;
-		const res = await imageGenerations(localStorage.token, message.content).catch((error) => {
-			toast.error(`${error}`);
-		});
-		console.log(res);
-
-		if (res) {
-			const files = res.map((image) => ({
-				type: 'image',
-				url: `${image.url}`
-			}));
-
-			saveMessage(message.id, {
-				...message,
-				files: files
-			});
-		}
-
-		generatingImage = false;
 	};
 
 	let feedbackLoading = false;
@@ -541,24 +539,70 @@
 		})();
 	}
 
+	const buttonsWheelHandler = (event: WheelEvent) => {
+		if (buttonsContainerElement) {
+			if (buttonsContainerElement.scrollWidth <= buttonsContainerElement.clientWidth) {
+				// If the container is not scrollable, horizontal scroll
+				return;
+			} else {
+				event.preventDefault();
+
+				if (event.deltaY !== 0) {
+					// Adjust horizontal scroll position based on vertical scroll
+					buttonsContainerElement.scrollLeft += event.deltaY;
+				}
+			}
+		}
+	};
+
+	const contentCopyHandler = (e) => {
+		if (contentContainerElement) {
+			e.preventDefault();
+			// Get the selected HTML
+			const selection = window.getSelection();
+			const range = selection.getRangeAt(0);
+			const tempDiv = document.createElement('div');
+
+			// Remove background, color, and font styles
+			tempDiv.appendChild(range.cloneContents());
+
+			tempDiv.querySelectorAll('table').forEach((table) => {
+				table.style.borderCollapse = 'collapse';
+				table.style.width = 'auto';
+				table.style.tableLayout = 'auto';
+			});
+
+			tempDiv.querySelectorAll('th').forEach((th) => {
+				th.style.whiteSpace = 'nowrap';
+				th.style.padding = '4px 8px';
+			});
+
+			// Put cleaned HTML + plain text into clipboard
+			e.clipboardData.setData('text/html', tempDiv.innerHTML);
+			e.clipboardData.setData('text/plain', selection.toString());
+		}
+	};
+
 	onMount(async () => {
 		// console.log('ResponseMessage mounted');
 
 		await tick();
 		if (buttonsContainerElement) {
-			buttonsContainerElement.addEventListener('wheel', function (event) {
-				if (buttonsContainerElement.scrollWidth <= buttonsContainerElement.clientWidth) {
-					// If the container is not scrollable, horizontal scroll
-					return;
-				} else {
-					event.preventDefault();
+			buttonsContainerElement.addEventListener('wheel', buttonsWheelHandler);
+		}
 
-					if (event.deltaY !== 0) {
-						// Adjust horizontal scroll position based on vertical scroll
-						buttonsContainerElement.scrollLeft += event.deltaY;
-					}
-				}
-			});
+		if (contentContainerElement) {
+			contentContainerElement.addEventListener('copy', contentCopyHandler);
+		}
+	});
+
+	onDestroy(() => {
+		if (buttonsContainerElement) {
+			buttonsContainerElement.removeEventListener('wheel', buttonsWheelHandler);
+		}
+
+		if (contentContainerElement) {
+			contentContainerElement.removeEventListener('copy', contentCopyHandler);
 		}
 	});
 </script>
@@ -576,13 +620,11 @@
 		class=" flex w-full message-{message.id}"
 		id="message-{message.id}"
 		dir={$settings.chatDirection}
+		style="scroll-margin-top: 3rem;"
 	>
 		<div class={`shrink-0 ltr:mr-3 rtl:ml-3 hidden @lg:flex mt-1 `}>
 			<ProfileImage
-				src={model?.info?.meta?.profile_image_url ??
-					($i18n.language === 'dg-DG'
-						? `${WEBUI_BASE_URL}/doge.png`
-						: `${WEBUI_BASE_URL}/favicon.png`)}
+				src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${model?.id}&lang=${$i18n.language}`}
 				className={'size-8 assistant-message-profile-image'}
 			/>
 		</div>
@@ -622,10 +664,13 @@
 						{/if}
 
 						{#if message?.files && message.files?.filter((f) => f.type === 'image').length > 0}
-							<div class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap">
+							<div
+								class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap"
+								dir={$settings?.chatDirection ?? 'auto'}
+							>
 								{#each message.files as file}
 									<div>
-										{#if file.type === 'image'}
+										{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
 											<Image src={file.url} alt={message.content} />
 										{:else}
 											<FileItem
@@ -643,14 +688,17 @@
 						{/if}
 
 						{#if message?.embeds && message.embeds.length > 0}
-							<div class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap">
+							<div
+								class="my-1 w-full flex overflow-x-auto gap-2 flex-wrap"
+								id={`${message.id}-embeds-container`}
+							>
 								{#each message.embeds as embed, idx}
 									<div class="my-2 w-full" id={`${message.id}-embeds-${idx}`}>
 										<FullHeightIframe
 											src={embed}
 											allowScripts={true}
 											allowForms={true}
-											allowSameOrigin={true}
+											allowSameOrigin={$settings?.iframeSandboxAllowSameOrigin ?? false}
 											allowPopups={true}
 										/>
 									</div>
@@ -666,8 +714,13 @@
 									class=" bg-transparent outline-hidden w-full resize-none"
 									bind:value={editedContent}
 									on:input={(e) => {
+										const messagesContainer = document.getElementById('messages-container');
+										const savedScrollTop = messagesContainer?.scrollTop;
+
 										e.target.style.height = '';
 										e.target.style.height = `${e.target.scrollHeight}px`;
+
+										if (messagesContainer) messagesContainer.scrollTop = savedScrollTop;
 									}}
 									on:keydown={(e) => {
 										if (e.key === 'Escape') {
@@ -719,72 +772,77 @@
 									</div>
 								</div>
 							</div>
-						{:else}
-							<div class="w-full flex flex-col relative" id="response-content-container">
-								{#if message.content === '' && !message.error && ((model?.info?.meta?.capabilities?.status_updates ?? true) ? (message?.statusHistory ?? [...(message?.status ? [message?.status] : [])]).length === 0 || (message?.statusHistory?.at(-1)?.hidden ?? false) : true)}
-									<Skeleton />
-								{:else if message.content && message.error !== true}
-									<!-- always show message contents even if there's an error -->
-									<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->
-									<ContentRenderer
-										id={`${chatId}-${message.id}`}
-										messageId={message.id}
-										{history}
-										{selectedModels}
-										content={message.content}
-										sources={message.sources}
-										floatingButtons={message?.done &&
-											!readOnly &&
-											($settings?.showFloatingActionButtons ?? true)}
-										save={!readOnly}
-										preview={!readOnly}
-										{editCodeBlock}
-										{topPadding}
-										done={($settings?.chatFadeStreamingText ?? true)
-											? (message?.done ?? false)
-											: true}
-										{model}
-										onTaskClick={async (e) => {
-											console.log(e);
-										}}
-										onSourceClick={async (id, idx) => {
-											console.log(id, idx);
-
-											if (citationsElement) {
-												citationsElement?.showSourceModal(idx - 1);
-											}
-										}}
-										onAddMessages={({ modelId, parentId, messages }) => {
-											addMessages({ modelId, parentId, messages });
-										}}
-										onSave={({ raw, oldContent, newContent }) => {
-											history.messages[message.id].content = history.messages[
-												message.id
-											].content.replace(raw, raw.replace(oldContent, newContent));
-
-											updateChat();
-										}}
-									/>
-								{/if}
-
-								{#if message?.error}
-									<Error content={message?.error?.content ?? message.content} />
-								{/if}
-
-								{#if (message?.sources || message?.citations) && (model?.info?.meta?.capabilities?.citations ?? true)}
-									<Citations
-										bind:this={citationsElement}
-										id={message?.id}
-										sources={message?.sources ?? message?.citations}
-										{readOnly}
-									/>
-								{/if}
-
-								{#if message.code_executions}
-									<CodeExecutions codeExecutions={message.code_executions} />
-								{/if}
-							</div>
 						{/if}
+
+						<div
+							bind:this={contentContainerElement}
+							class="w-full flex flex-col relative {edit ? 'hidden' : ''}"
+							id="response-content-container"
+						>
+							{#if message.content === '' && !message.error && ((model?.info?.meta?.capabilities?.status_updates ?? true) ? (message?.statusHistory ?? [...(message?.status ? [message?.status] : [])]).length === 0 || (message?.statusHistory?.at(-1)?.hidden ?? false) : true)}
+								<Skeleton />
+							{:else if message.content && message.error !== true}
+								<!-- always show message contents even if there's an error -->
+								<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->
+								<ContentRenderer
+									id={`${chatId}-${message.id}`}
+									messageId={message.id}
+									{history}
+									{selectedModels}
+									content={message.content}
+									sources={message.sources}
+									floatingButtons={message?.done &&
+										!readOnly &&
+										($settings?.showFloatingActionButtons ?? true)}
+									save={!readOnly}
+									preview={!readOnly}
+									{editCodeBlock}
+									{topPadding}
+									done={($settings?.chatFadeStreamingText ?? true)
+										? (message?.done ?? false)
+										: true}
+									{model}
+									onTaskClick={async (e) => {
+										console.log(e);
+									}}
+									onSourceClick={async (id) => {
+										console.log(id);
+
+										if (citationsElement) {
+											citationsElement?.showSourceModal(id);
+										}
+									}}
+									onAddMessages={({ modelId, parentId, messages }) => {
+										addMessages({ modelId, parentId, messages });
+									}}
+									onSave={({ raw, oldContent, newContent }) => {
+										history.messages[message.id].content = history.messages[
+											message.id
+										].content.replace(raw, raw.replace(oldContent, newContent));
+
+										updateChat();
+									}}
+								/>
+							{/if}
+
+							{#if message?.error}
+								<Error content={message?.error?.content ?? message.content} />
+							{/if}
+
+							{#if (message?.sources || message?.citations) && (model?.info?.meta?.capabilities?.citations ?? true)}
+								<Citations
+									bind:this={citationsElement}
+									id={message?.id}
+									{chatId}
+									sources={message?.sources ?? message?.citations}
+									{readOnly}
+								/>
+							{/if}
+
+							{#if message.code_executions}
+								<CodeExecutions codeExecutions={message.code_executions} />
+							{/if}
+						</div>
 					</div>
 				</div>
 
@@ -1033,73 +1091,6 @@
 														stroke-linecap="round"
 														stroke-linejoin="round"
 														d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"
-													/>
-												</svg>
-											{/if}
-										</button>
-									</Tooltip>
-								{/if}
-
-								{#if $config?.features.enable_image_generation && ($user?.role === 'admin' || $user?.permissions?.features?.image_generation) && !readOnly}
-									<Tooltip content={$i18n.t('Generate Image')} placement="bottom">
-										<button
-											aria-label={$i18n.t('Generate Image')}
-											class="{isLastMessage || ($settings?.highContrastMode ?? false)
-												? 'visible'
-												: 'invisible group-hover:visible'}  p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition"
-											on:click={() => {
-												if (!generatingImage) {
-													generateImage(message);
-												}
-											}}
-										>
-											{#if generatingImage}
-												<svg
-													aria-hidden="true"
-													class=" w-4 h-4"
-													fill="currentColor"
-													viewBox="0 0 24 24"
-													xmlns="http://www.w3.org/2000/svg"
-												>
-													<style>
-														.spinner_S1WN {
-															animation: spinner_MGfb 0.8s linear infinite;
-															animation-delay: -0.8s;
-														}
-
-														.spinner_Km9P {
-															animation-delay: -0.65s;
-														}
-
-														.spinner_JApP {
-															animation-delay: -0.5s;
-														}
-
-														@keyframes spinner_MGfb {
-															93.75%,
-															100% {
-																opacity: 0.2;
-															}
-														}
-													</style>
-													<circle class="spinner_S1WN" cx="4" cy="12" r="3" />
-													<circle class="spinner_S1WN spinner_Km9P" cx="12" cy="12" r="3" />
-													<circle class="spinner_S1WN spinner_JApP" cx="20" cy="12" r="3" />
-												</svg>
-											{:else}
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													fill="none"
-													aria-hidden="true"
-													viewBox="0 0 24 24"
-													stroke-width="2.3"
-													stroke="currentColor"
-													class="w-4 h-4"
-												>
-													<path
-														stroke-linecap="round"
-														stroke-linejoin="round"
-														d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"
 													/>
 												</svg>
 											{/if}
@@ -1412,37 +1403,35 @@
 										{/if}
 									{/if}
 
-									{#if isLastMessage}
-										{#each model?.actions ?? [] as action}
-											<Tooltip content={action.name} placement="bottom">
-												<button
-													type="button"
-													aria-label={action.name}
-													class="{isLastMessage || ($settings?.highContrastMode ?? false)
-														? 'visible'
-														: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition"
-													on:click={() => {
-														actionMessage(action.id, message);
-													}}
-												>
-													{#if action?.icon}
-														<div class="size-4">
-															<img
-																src={action.icon}
-																class="w-4 h-4 {action.icon.includes('svg')
-																	? 'dark:invert-[80%]'
-																	: ''}"
-																style="fill: currentColor;"
-																alt={action.name}
-															/>
-														</div>
-													{:else}
-														<Sparkles strokeWidth="2.1" className="size-4" />
-													{/if}
-												</button>
-											</Tooltip>
-										{/each}
-									{/if}
+									{#each model?.actions ?? [] as action}
+										<Tooltip content={action.name} placement="bottom">
+											<button
+												type="button"
+												aria-label={action.name}
+												class="{isLastMessage || ($settings?.highContrastMode ?? false)
+													? 'visible'
+													: 'invisible group-hover:visible'} p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg dark:hover:text-white hover:text-black transition"
+												on:click={() => {
+													actionMessage(action.id, message);
+												}}
+											>
+												{#if action?.icon}
+													<div class="size-4">
+														<img
+															src={action.icon}
+															class="w-4 h-4 {action.icon.includes('data:image/svg')
+																? 'dark:invert-[80%]'
+																: ''}"
+															style="fill: currentColor;"
+															alt={action.name}
+														/>
+													</div>
+												{:else}
+													<Sparkles strokeWidth="2.1" className="size-4" />
+												{/if}
+											</button>
+										</Tooltip>
+									{/each}
 								{/if}
 							{/if}
 						{/if}

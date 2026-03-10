@@ -19,7 +19,7 @@
 	</div>
 
 	<div
-		class="text-sm border border-gray-50 dark:border-gray-850 rounded-xl my-1.5 p-2 w-full"
+		class="text-sm border border-gray-50 dark:border-gray-850/30 rounded-xl my-1.5 p-2 w-full"
 		slot="content"
 	>
 		{#if status?.query}
@@ -67,7 +67,7 @@
 						<div class="w-fit">
 							<img
 								src="https://www.google.com/s2/favicons?sz=32&domain={item.link}"
-								alt="favicon"
+								alt="{item?.title ?? item.link} favicon"
 								class="size-3.5"
 							/>
 						</div>
@@ -107,7 +107,7 @@
 						<div class="w-fit">
 							<img
 								src="https://www.google.com/s2/favicons?sz=32&domain={url}"
-								alt="favicon"
+								alt="{url} favicon"
 								class="size-3.5"
 							/>
 						</div>

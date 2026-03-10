@@ -1,7 +1,8 @@
 <script lang="ts">
 	import DOMPurify from 'dompurify';
+	import { v4 as uuidv4 } from 'uuid';
 
-	import { getVersionUpdates, getWebhookUrl, updateWebhookUrl } from '$lib/apis';
+	import { getBackendConfig, getVersionUpdates, getWebhookUrl, updateWebhookUrl } from '$lib/apis';
 	import {
 		getAdminConfig,
 		getLdapConfig,
@@ -10,15 +11,19 @@
 		updateLdapConfig,
 		updateLdapServer
 	} from '$lib/apis/auths';
+	import { getBanners, setBanners } from '$lib/apis/configs';
+	import { getGroups } from '$lib/apis/groups';
 	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import { WEBUI_BUILD_HASH, WEBUI_VERSION } from '$lib/constants';
-	import { config, showChangelog } from '$lib/stores';
+	import { banners as _banners, config, showChangelog } from '$lib/stores';
+	import type { Banner } from '$lib/types';
 	import { compareVersion } from '$lib/utils';
 	import { onMount, getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import Textarea from '$lib/components/common/Textarea.svelte';
+	import Banners from './Interface/Banners.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -32,6 +37,9 @@
 
 	let adminConfig = null;
 	let webhookUrl = '';
+	let groups = [];
+
+	let banners: Banner[] = [];
 
 	// LDAP
 	let ENABLE_LDAP = false;
@@ -76,11 +84,19 @@
 		}
 	};
 
+	const updateBanners = async () => {
+		_banners.set(await setBanners(localStorage.token, banners));
+	};
+
 	const updateHandler = async () => {
 		webhookUrl = await updateWebhookUrl(localStorage.token, webhookUrl);
 		const res = await updateAdminConfig(localStorage.token, adminConfig);
 		await updateLdapConfig(localStorage.token, ENABLE_LDAP);
 		await updateLdapServerHandler();
+
+		await updateBanners();
+
+		await config.set(await getBackendConfig());
 
 		if (res) {
 			saveHandler();
@@ -104,11 +120,16 @@
 			})(),
 			(async () => {
 				LDAP_SERVER = await getLdapServer(localStorage.token);
+			})(),
+			(async () => {
+				groups = await getGroups(localStorage.token);
 			})()
 		]);
 
 		const ldapConfig = await getLdapConfig(localStorage.token);
 		ENABLE_LDAP = ldapConfig.ENABLE_LDAP;
+
+		banners = await getBanners(localStorage.token);
 	});
 </script>
 
@@ -124,7 +145,7 @@
 				<div class="mb-3.5">
 					<div class=" mt-0.5 mb-2.5 text-base font-medium">{$i18n.t('General')}</div>
 
-					<hr class=" border-gray-100 dark:border-gray-850 my-2" />
+					<hr class=" border-gray-100/30 dark:border-gray-850/30 my-2" />
 
 					<div class="mb-2.5">
 						<div class=" mb-1 text-xs font-medium flex space-x-2 items-center">
@@ -282,19 +303,35 @@
 				<div class="mb-3">
 					<div class=" mt-0.5 mb-2.5 text-base font-medium">{$i18n.t('Authentication')}</div>
 
-					<hr class=" border-gray-100 dark:border-gray-850 my-2" />
+					<hr class=" border-gray-100/30 dark:border-gray-850/30 my-2" />
 
 					<div class="  mb-2.5 flex w-full justify-between">
 						<div class=" self-center text-xs font-medium">{$i18n.t('Default User Role')}</div>
 						<div class="flex items-center relative">
 							<select
-								class="dark:bg-gray-900 w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
+								class="w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
 								bind:value={adminConfig.DEFAULT_USER_ROLE}
 								placeholder={$i18n.t('Select a role')}
 							>
 								<option value="pending">{$i18n.t('pending')}</option>
 								<option value="user">{$i18n.t('user')}</option>
 								<option value="admin">{$i18n.t('admin')}</option>
+							</select>
+						</div>
+					</div>
+
+					<div class="  mb-2.5 flex w-full justify-between">
+						<div class=" self-center text-xs font-medium">{$i18n.t('Default Group')}</div>
+						<div class="flex items-center relative">
+							<select
+								class="w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
+								bind:value={adminConfig.DEFAULT_GROUP_ID}
+								placeholder={$i18n.t('Select a group')}
+							>
+								<option value={''}>None</option>
+								{#each groups as group}
+									<option value={group.id}>{group.name}</option>
+								{/each}
 							</select>
 						</div>
 					</div>
@@ -312,6 +349,23 @@
 
 						<Switch bind:state={adminConfig.SHOW_ADMIN_DETAILS} />
 					</div>
+
+					{#if adminConfig.SHOW_ADMIN_DETAILS}
+						<div class="mb-2.5 w-full justify-between">
+							<div class="flex w-full justify-between">
+								<div class=" self-center text-xs font-medium">{$i18n.t('Admin Contact Email')}</div>
+							</div>
+
+							<div class="flex mt-2 space-x-2">
+								<input
+									class="w-full rounded-lg py-2 px-4 text-sm bg-gray-50 dark:text-gray-300 dark:bg-gray-850 outline-hidden"
+									type="email"
+									placeholder={$i18n.t('Leave empty to use first admin user')}
+									bind:value={adminConfig.ADMIN_EMAIL}
+								/>
+							</div>
+						</div>
+					{/if}
 
 					<div class="mb-2.5">
 						<div class=" self-center text-xs font-medium mb-2">
@@ -338,37 +392,36 @@
 					</div>
 
 					<div class="mb-2.5 flex w-full justify-between pr-2">
-						<div class=" self-center text-xs font-medium">{$i18n.t('Enable API Key')}</div>
+						<div class=" self-center text-xs font-medium">{$i18n.t('Enable API Keys')}</div>
 
-						<Switch bind:state={adminConfig.ENABLE_API_KEY} />
+						<Switch bind:state={adminConfig.ENABLE_API_KEYS} />
 					</div>
 
-					{#if adminConfig?.ENABLE_API_KEY}
+					{#if adminConfig?.ENABLE_API_KEYS}
 						<div class="mb-2.5 flex w-full justify-between pr-2">
 							<div class=" self-center text-xs font-medium">
 								{$i18n.t('API Key Endpoint Restrictions')}
 							</div>
 
-							<Switch bind:state={adminConfig.ENABLE_API_KEY_ENDPOINT_RESTRICTIONS} />
+							<Switch bind:state={adminConfig.ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS} />
 						</div>
 
-						{#if adminConfig?.ENABLE_API_KEY_ENDPOINT_RESTRICTIONS}
-							<div class=" flex w-full flex-col pr-2">
+						{#if adminConfig?.ENABLE_API_KEYS_ENDPOINT_RESTRICTIONS}
+							<div class=" flex w-full flex-col pr-2 mb-2.5">
 								<div class=" text-xs font-medium">
 									{$i18n.t('Allowed Endpoints')}
 								</div>
 
 								<input
-									class="w-full mt-1 rounded-lg text-sm dark:text-gray-300 bg-transparent outline-hidden"
+									class="w-full mt-1 text-sm dark:text-gray-300 bg-transparent outline-hidden"
 									type="text"
 									placeholder={`e.g.) /api/v1/messages, /api/v1/channels`}
-									bind:value={adminConfig.API_KEY_ALLOWED_ENDPOINTS}
+									bind:value={adminConfig.API_KEYS_ALLOWED_ENDPOINTS}
 								/>
 
 								<div class="mt-2 text-xs text-gray-400 dark:text-gray-500">
-									<!-- https://docs.openwebui.com/getting-started/advanced-topics/api-endpoints -->
 									<a
-										href="https://docs.openwebui.com/getting-started/api-endpoints"
+										href="https://docs.openwebui.com/reference/api-endpoints"
 										target="_blank"
 										class=" text-gray-300 font-medium underline"
 									>
@@ -409,7 +462,7 @@
 										<span class=" font-medium">{$i18n.t('Warning')}:</span>
 										<span
 											><a
-												href="https://docs.openwebui.com/getting-started/env-configuration#jwt_expires_in"
+												href="https://docs.openwebui.com/reference/env-configuration#jwt_expires_in"
 												target="_blank"
 												class=" underline"
 												>{$i18n.t('No expiration can pose security risks.')}
@@ -488,7 +541,6 @@
 											>
 												<input
 													class="w-full bg-transparent outline-hidden py-0.5"
-													required
 													placeholder={$i18n.t('Enter Application DN')}
 													bind:value={LDAP_SERVER.app_dn}
 												/>
@@ -500,6 +552,7 @@
 											</div>
 											<SensitiveInput
 												placeholder={$i18n.t('Enter Application DN Password')}
+												required={false}
 												bind:value={LDAP_SERVER.app_dn_password}
 											/>
 										</div>
@@ -639,7 +692,7 @@
 				<div class="mb-3">
 					<div class=" mt-0.5 mb-2.5 text-base font-medium">{$i18n.t('Features')}</div>
 
-					<hr class=" border-gray-100 dark:border-gray-850 my-2" />
+					<hr class=" border-gray-100/30 dark:border-gray-850/30 my-2" />
 
 					<div class="mb-2.5 flex w-full items-center justify-between pr-2">
 						<div class=" self-center text-xs font-medium">
@@ -654,6 +707,38 @@
 
 						<Switch bind:state={adminConfig.ENABLE_MESSAGE_RATING} />
 					</div>
+
+					<div class="mb-2.5 flex w-full items-center justify-between pr-2">
+						<div class=" self-center text-xs font-medium">
+							{$i18n.t('Folders')}
+						</div>
+
+						<Switch bind:state={adminConfig.ENABLE_FOLDERS} />
+					</div>
+
+					{#if adminConfig.ENABLE_FOLDERS}
+						<div class="mb-2.5 w-full justify-between">
+							<div class="flex w-full justify-between">
+								<div class=" self-center text-xs font-medium">
+									{$i18n.t('Folder Max File Count')}
+								</div>
+							</div>
+
+							<div class="flex mt-2 space-x-2">
+								<input
+									class="w-full rounded-lg py-2 px-4 text-sm bg-gray-50 dark:text-gray-300 dark:bg-gray-850 outline-hidden"
+									type="number"
+									min="0"
+									placeholder={$i18n.t('Leave empty for unlimited')}
+									bind:value={adminConfig.FOLDER_MAX_FILE_COUNT}
+								/>
+							</div>
+
+							<div class="mt-2 text-xs text-gray-400 dark:text-gray-500">
+								{$i18n.t('Maximum number of files allowed per folder.')}
+							</div>
+						</div>
+					{/if}
 
 					<div class="mb-2.5 flex w-full items-center justify-between pr-2">
 						<div class=" self-center text-xs font-medium">
@@ -673,10 +758,26 @@
 
 					<div class="mb-2.5 flex w-full items-center justify-between pr-2">
 						<div class=" self-center text-xs font-medium">
+							{$i18n.t('Memories')} ({$i18n.t('Beta')})
+						</div>
+
+						<Switch bind:state={adminConfig.ENABLE_MEMORIES} />
+					</div>
+
+					<div class="mb-2.5 flex w-full items-center justify-between pr-2">
+						<div class=" self-center text-xs font-medium">
 							{$i18n.t('User Webhooks')}
 						</div>
 
 						<Switch bind:state={adminConfig.ENABLE_USER_WEBHOOKS} />
+					</div>
+
+					<div class="mb-2.5 flex w-full items-center justify-between pr-2">
+						<div class=" self-center text-xs font-medium">
+							{$i18n.t('User Status')}
+						</div>
+
+						<Switch bind:state={adminConfig.ENABLE_USER_STATUS} />
 					</div>
 
 					<div class="mb-2.5">
@@ -723,6 +824,53 @@
 								bind:value={webhookUrl}
 							/>
 						</div>
+					</div>
+				</div>
+
+				<div class="mb-3.5">
+					<div class=" mt-0.5 mb-2.5 text-base font-medium">{$i18n.t('UI')}</div>
+
+					<hr class=" border-gray-100/30 dark:border-gray-850/30 my-2" />
+
+					<div class="mb-2.5">
+						<div class="flex w-full justify-between">
+							<div class=" self-center text-xs">
+								{$i18n.t('Banners')}
+							</div>
+
+							<button
+								class="p-1 px-3 text-xs flex rounded-sm transition"
+								type="button"
+								on:click={() => {
+									if (banners.length === 0 || banners.at(-1).content !== '') {
+										banners = [
+											...banners,
+											{
+												id: uuidv4(),
+												type: '',
+												title: '',
+												content: '',
+												dismissible: true,
+												timestamp: Math.floor(Date.now() / 1000)
+											}
+										];
+									}
+								}}
+							>
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									viewBox="0 0 20 20"
+									fill="currentColor"
+									class="w-4 h-4"
+								>
+									<path
+										d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z"
+									/>
+								</svg>
+							</button>
+						</div>
+
+						<Banners bind:banners />
 					</div>
 				</div>
 			</div>

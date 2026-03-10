@@ -12,7 +12,7 @@
 	import ArchiveBox from '$lib/components/icons/ArchiveBox.svelte';
 	import DocumentDuplicate from '$lib/components/icons/DocumentDuplicate.svelte';
 	import Download from '$lib/components/icons/Download.svelte';
-	import { config } from '$lib/stores';
+	import { config, user } from '$lib/stores';
 
 	const i18n = getContext('i18n');
 
@@ -47,7 +47,7 @@
 			transition={flyAndScale}
 		>
 			<DropdownMenu.Item
-				class="flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800  rounded-xl"
+				class="select-none flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800  rounded-xl"
 				on:click={() => {
 					editHandler();
 				}}
@@ -72,7 +72,7 @@
 
 			{#if $config.features.enable_community_sharing}
 				<DropdownMenu.Item
-					class="flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800  rounded-xl"
+					class="select-none flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800  rounded-xl"
 					on:click={() => {
 						shareHandler();
 					}}
@@ -83,7 +83,7 @@
 			{/if}
 
 			<DropdownMenu.Item
-				class="flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-xl"
+				class="select-none flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-xl"
 				on:click={() => {
 					cloneHandler();
 				}}
@@ -93,21 +93,23 @@
 				<div class="flex items-center">{$i18n.t('Clone')}</div>
 			</DropdownMenu.Item>
 
+			{#if $user?.role === 'admin' || $user?.permissions?.workspace?.tools_export}
+				<DropdownMenu.Item
+					class="select-none flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-xl"
+					on:click={() => {
+						exportHandler();
+					}}
+				>
+					<Download />
+
+					<div class="flex items-center">{$i18n.t('Export')}</div>
+				</DropdownMenu.Item>
+			{/if}
+
+			<hr class="border-gray-50 dark:border-gray-850/30 my-1" />
+
 			<DropdownMenu.Item
-				class="flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-xl"
-				on:click={() => {
-					exportHandler();
-				}}
-			>
-				<Download />
-
-				<div class="flex items-center">{$i18n.t('Export')}</div>
-			</DropdownMenu.Item>
-
-			<hr class="border-gray-50 dark:border-gray-850 my-1" />
-
-			<DropdownMenu.Item
-				class="flex  gap-2  items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-xl"
+				class="select-none flex  gap-2  items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-xl"
 				on:click={() => {
 					deleteHandler();
 				}}

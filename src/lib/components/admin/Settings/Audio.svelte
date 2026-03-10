@@ -212,7 +212,7 @@
 			<div>
 				<div class=" mt-0.5 mb-2.5 text-base font-medium">{$i18n.t('Speech-to-Text')}</div>
 
-				<hr class=" border-gray-100 dark:border-gray-850 my-2" />
+				<hr class=" border-gray-100/30 dark:border-gray-850/30 my-2" />
 
 				{#if STT_ENGINE !== 'web'}
 					<div class="mb-2">
@@ -235,7 +235,7 @@
 					<div class=" self-center text-xs font-medium">{$i18n.t('Speech-to-Text Engine')}</div>
 					<div class="flex items-center relative">
 						<select
-							class="dark:bg-gray-900 cursor-pointer w-fit pr-8 rounded-sm px-2 p-1 text-xs bg-transparent outline-hidden text-right"
+							class="cursor-pointer w-fit pr-8 rounded-sm px-2 p-1 text-xs bg-transparent outline-hidden text-right"
 							bind:value={STT_ENGINE}
 							placeholder={$i18n.t('Select an engine')}
 						>
@@ -263,7 +263,7 @@
 						</div>
 					</div>
 
-					<hr class="border-gray-100 dark:border-gray-850 my-2" />
+					<hr class="border-gray-100/30 dark:border-gray-850/30 my-2" />
 
 					<div>
 						<div class=" mb-1.5 text-xs font-medium">{$i18n.t('STT Model')}</div>
@@ -289,7 +289,7 @@
 						</div>
 					</div>
 
-					<hr class="border-gray-100 dark:border-gray-850 my-2" />
+					<hr class="border-gray-100/30 dark:border-gray-850/30 my-2" />
 
 					<div>
 						<div class=" mb-1.5 text-xs font-medium">{$i18n.t('STT Model')}</div>
@@ -323,7 +323,7 @@
 							/>
 						</div>
 
-						<hr class="border-gray-100 dark:border-gray-850 my-2" />
+						<hr class="border-gray-100/30 dark:border-gray-850/30 my-2" />
 
 						<div>
 							<div class=" mb-1.5 text-xs font-medium">{$i18n.t('Azure Region')}</div>
@@ -391,7 +391,7 @@
 						</div>
 					</div>
 
-					<hr class="border-gray-100 dark:border-gray-850 my-2" />
+					<hr class="border-gray-100/30 dark:border-gray-850/30 my-2" />
 
 					<div>
 						<div class=" mb-1.5 text-xs font-medium">{$i18n.t('STT Model')}</div>
@@ -416,7 +416,7 @@
 						</div>
 					</div>
 
-					<hr class="border-gray-100 dark:border-gray-850 my-2" />
+					<hr class="border-gray-100/30 dark:border-gray-850/30 my-2" />
 
 					<div>
 						<div class="flex items-center justify-between mb-2">
@@ -500,13 +500,13 @@
 			<div>
 				<div class=" mt-0.5 mb-2.5 text-base font-medium">{$i18n.t('Text-to-Speech')}</div>
 
-				<hr class=" border-gray-100 dark:border-gray-850 my-2" />
+				<hr class=" border-gray-100/30 dark:border-gray-850/30 my-2" />
 
 				<div class="mb-2 py-0.5 flex w-full justify-between">
 					<div class=" self-center text-xs font-medium">{$i18n.t('Text-to-Speech Engine')}</div>
 					<div class="flex items-center relative">
 						<select
-							class=" dark:bg-gray-900 w-fit pr-8 cursor-pointer rounded-sm px-2 p-1 text-xs bg-transparent outline-hidden text-right"
+							class="w-fit pr-8 cursor-pointer rounded-sm px-2 p-1 text-xs bg-transparent outline-hidden text-right"
 							bind:value={TTS_ENGINE}
 							placeholder={$i18n.t('Select a mode')}
 							on:change={async (e) => {
@@ -548,12 +548,7 @@
 				{:else if TTS_ENGINE === 'elevenlabs'}
 					<div>
 						<div class="mt-1 flex gap-2 mb-1">
-							<input
-								class="flex-1 w-full rounded-lg py-2 pl-4 text-sm bg-gray-50 dark:text-gray-300 dark:bg-gray-850 outline-hidden"
-								placeholder={$i18n.t('API Key')}
-								bind:value={TTS_API_KEY}
-								required
-							/>
+							<SensitiveInput placeholder={$i18n.t('API Key')} bind:value={TTS_API_KEY} required />
 						</div>
 					</div>
 				{:else if TTS_ENGINE === 'azure'}
@@ -562,7 +557,7 @@
 							<SensitiveInput placeholder={$i18n.t('API Key')} bind:value={TTS_API_KEY} required />
 						</div>
 
-						<hr class="border-gray-100 dark:border-gray-850 my-2" />
+						<hr class="border-gray-100/30 dark:border-gray-850/30 my-2" />
 
 						<div>
 							<div class=" mb-1.5 text-xs font-medium">{$i18n.t('Azure Region')}</div>
@@ -803,7 +798,7 @@
 					<div class="self-center text-xs font-medium">{$i18n.t('Response splitting')}</div>
 					<div class="flex items-center relative">
 						<select
-							class="dark:bg-gray-900 w-fit pr-8 cursor-pointer rounded-sm px-2 p-1 text-xs bg-transparent outline-hidden text-right"
+							class="w-fit pr-8 cursor-pointer rounded-sm px-2 p-1 text-xs bg-transparent outline-hidden text-right"
 							aria-label={$i18n.t('Select how to split message text for TTS requests')}
 							bind:value={TTS_SPLIT_ON}
 						>

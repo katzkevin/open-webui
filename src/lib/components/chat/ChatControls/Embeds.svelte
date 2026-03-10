@@ -1,16 +1,48 @@
-<script>
+<script lang="ts">
 	import { embed, showControls, showEmbeds } from '$lib/stores';
 
 	import FullHeightIframe from '$lib/components/common/FullHeightIframe.svelte';
 	import XMark from '$lib/components/icons/XMark.svelte';
 
 	export let overlay = false;
+
+	const getSrcUrl = (url: string, chatId?: string, messageId?: string, sourceId: string) => {
+		try {
+			const parsed = new URL(url);
+
+			if (chatId) {
+				parsed.searchParams.set('chat_id', chatId);
+			}
+
+			if (messageId) {
+				parsed.searchParams.set('message_id', messageId);
+			}
+
+			if (sourceId) {
+				parsed.searchParams.set('source_id', sourceId);
+			}
+
+			return parsed.toString();
+		} catch {
+			// Fallback for relative URLs or invalid input
+			const hasQuery = url.includes('?');
+			const parts = [];
+
+			if (chatId) parts.push(`chat_id=${encodeURIComponent(chatId)}`);
+			if (messageId) parts.push(`message_id=${encodeURIComponent(messageId)}`);
+			if (sourceId) parts.push(`source_id=${encodeURIComponent(sourceId)}`);
+
+			if (parts.length === 0) return url;
+
+			return url + (hasQuery ? '&' : '?') + parts.join('&');
+		}
+	};
 </script>
 
 {#if $embed}
-	<div class="h-full w-full">
+	<div class="h-full w-full flex flex-col">
 		<div
-			class="pointer-events-auto z-20 flex justify-between items-center py-3 px-2 font-primar text-gray-900 dark:text-white"
+			class="pointer-events-auto z-20 flex justify-between items-center py-3 px-2 font-primar text-gray-900 dark:text-white flex-shrink-0"
 		>
 			<div class="flex-1 flex items-center justify-between pl-2">
 				<a
@@ -25,6 +57,7 @@
 
 			<button
 				class="self-center pointer-events-auto p-1 rounded-full bg-white dark:bg-gray-850"
+				aria-label="Close embed"
 				on:click={() => {
 					showControls.set(false);
 					showEmbeds.set(false);
@@ -35,12 +68,16 @@
 			</button>
 		</div>
 
-		<div class=" w-full h-full relative">
+		<div class="w-full flex-1 min-h-0 relative">
 			{#if overlay}
 				<div class=" absolute top-0 left-0 right-0 bottom-0 z-10"></div>
 			{/if}
 
-			<FullHeightIframe src={$embed?.url} iframeClassName="w-full h-full" />
+			<FullHeightIframe
+				src={getSrcUrl($embed?.url ?? '', $embed?.chatId, $embed?.messageId, $embed?.sourceId)}
+				payload={$embed?.source ?? null}
+				iframeClassName="w-full h-full"
+			/>
 		</div>
 	</div>
 {/if}

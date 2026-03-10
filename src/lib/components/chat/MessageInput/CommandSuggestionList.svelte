@@ -1,15 +1,8 @@
 <script lang="ts">
-	import { knowledge, prompts } from '$lib/stores';
-
-	import { getPrompts } from '$lib/apis/prompts';
-	import { getKnowledgeBases } from '$lib/apis/knowledge';
-
 	import Prompts from './Commands/Prompts.svelte';
 	import Knowledge from './Commands/Knowledge.svelte';
 	import Models from './Commands/Models.svelte';
-	import Spinner from '$lib/components/common/Spinner.svelte';
-
-	import { onMount } from 'svelte';
+	import Skills from './Commands/Skills.svelte';
 
 	export let char = '';
 	export let query = '';
@@ -20,25 +13,7 @@
 	export let insertTextHandler = (text) => {};
 
 	let suggestionElement = null;
-	let loading = false;
 	let filteredItems = [];
-
-	const init = async () => {
-		loading = true;
-		await Promise.all([
-			(async () => {
-				prompts.set(await getPrompts(localStorage.token));
-			})(),
-			(async () => {
-				knowledge.set(await getKnowledgeBases(localStorage.token));
-			})()
-		]);
-		loading = false;
-	};
-
-	onMount(() => {
-		init();
-	});
 
 	const onKeyDown = (event: KeyboardEvent) => {
 		if (!['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(event.key)) return false;
@@ -83,77 +58,83 @@
 	id="suggestions-container"
 >
 	<div class="overflow-y-auto scrollbar-thin max-h-60">
-		{#if !loading}
-			{#if char === '/'}
-				<Prompts
-					bind:this={suggestionElement}
-					{query}
-					bind:filteredItems
-					prompts={$prompts ?? []}
-					onSelect={(e) => {
-						const { type, data } = e;
+		{#if char === '/'}
+			<Prompts
+				bind:this={suggestionElement}
+				{query}
+				bind:filteredItems
+				onSelect={(e) => {
+					const { type, data } = e;
 
-						if (type === 'prompt') {
-							insertTextHandler(data.content);
-						}
-					}}
-				/>
-			{:else if char === '#'}
-				<Knowledge
-					bind:this={suggestionElement}
-					{query}
-					bind:filteredItems
-					knowledge={$knowledge ?? []}
-					onSelect={(e) => {
-						const { type, data } = e;
+					if (type === 'prompt') {
+						insertTextHandler(data.content);
+					}
+				}}
+			/>
+		{:else if char === '#'}
+			<Knowledge
+				bind:this={suggestionElement}
+				{query}
+				bind:filteredItems
+				onSelect={(e) => {
+					const { type, data } = e;
 
-						if (type === 'knowledge') {
-							insertTextHandler('');
+					if (type === 'knowledge') {
+						insertTextHandler('');
 
-							onUpload({
-								type: 'file',
-								data: data
-							});
-						} else if (type === 'youtube') {
-							insertTextHandler('');
+						onUpload({
+							type: 'file',
+							data: data
+						});
+					} else if (type === 'web') {
+						insertTextHandler('');
 
-							onUpload({
-								type: 'youtube',
-								data: data
-							});
-						} else if (type === 'web') {
-							insertTextHandler('');
+						onUpload({
+							type: 'web',
+							data: data
+						});
+					}
+				}}
+			/>
+		{:else if char === '@'}
+			<Models
+				bind:this={suggestionElement}
+				{query}
+				bind:filteredItems
+				onSelect={(e) => {
+					const { type, data } = e;
 
-							onUpload({
-								type: 'web',
-								data: data
-							});
-						}
-					}}
-				/>
-			{:else if char === '@'}
-				<Models
-					bind:this={suggestionElement}
-					{query}
-					bind:filteredItems
-					onSelect={(e) => {
-						const { type, data } = e;
+					if (type === 'model') {
+						insertTextHandler('');
 
-						if (type === 'model') {
-							insertTextHandler('');
+						onSelect({
+							type: 'model',
+							data: data
+						});
+					}
+				}}
+			/>
+		{:else if char === '$'}
+			<Skills
+				bind:this={suggestionElement}
+				{query}
+				bind:filteredItems
+				onSelect={(e) => {
+					const { type, data } = e;
 
-							onSelect({
-								type: 'model',
-								data: data
-							});
-						}
-					}}
-				/>
-			{/if}
-		{:else}
-			<div class="py-4 flex flex-col w-full rounded-xl text-gray-700 dark:text-gray-300">
-				<Spinner />
-			</div>
+					if (type === 'skill') {
+						command({
+							id: `${data.id}|${data.name}`,
+							label: data.name
+						});
+
+						onSelect({
+							type: 'skill',
+							data: data
+						});
+					}
+				}}
+			/>
 		{/if}
 	</div>
 </div>

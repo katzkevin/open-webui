@@ -98,35 +98,57 @@
 		return onKeyDown(event);
 	}
 
-	const keydownListener = (e) => {
-		// required to prevent the default enter behavior
-		if (e.key === 'Enter') {
-			e.preventDefault();
-			select(selectedIndex);
-		}
-	};
+	onMount(() => {
+		const keydownListener = (e: KeyboardEvent) => {
+			// required to prevent the default enter behavior
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				select(selectedIndex);
+			}
+		};
 
-	onMount(async () => {
 		window.addEventListener('keydown', keydownListener);
+
 		if (channelSuggestions) {
 			// Add a dummy channel item
 			_channels = [
-				...$channels.map((c) => ({ type: 'channel', id: c.id, label: c.name, data: c }))
+				...$channels
+					.filter((c) => c?.type !== 'dm')
+					.map((c) => ({ type: 'channel', id: c.id, label: c.name, data: c }))
 			];
 		} else {
 			if (userSuggestions) {
-				await getUserList();
+				getUserList();
 			}
 
 			if (modelSuggestions) {
 				_models = [...$models.map((m) => ({ type: 'model', id: m.id, label: m.name, data: m }))];
 			}
 		}
+
+		return () => {
+			window.removeEventListener('keydown', keydownListener);
+		};
 	});
 
-	onDestroy(() => {
-		window.removeEventListener('keydown', keydownListener);
-	});
+	const hasPublicReadGrant = (grants: any) =>
+		Array.isArray(grants) &&
+		grants.some(
+			(grant) =>
+				grant?.principal_type === 'user' &&
+				grant?.principal_id === '*' &&
+				grant?.permission === 'read'
+		);
+
+	const isPublicChannel = (channel: any): boolean => {
+		if (channel?.type === 'group') {
+			if (typeof channel?.is_private === 'boolean') {
+				return !channel.is_private;
+			}
+			return hasPublicReadGrant(channel?.access_grants);
+		}
+		return hasPublicReadGrant(channel?.access_grants);
+	};
 </script>
 
 {#if filteredItems.length}
@@ -163,7 +185,7 @@
 					>
 						{#if item.type === 'channel'}
 							<div class=" size-4 justify-center flex items-center mr-0.5">
-								{#if item?.data?.access_control === null}
+								{#if isPublicChannel(item?.data)}
 									<Hashtag className="size-3" strokeWidth="2.5" />
 								{:else}
 									<Lock className="size-[15px]" strokeWidth="2" />
@@ -171,8 +193,7 @@
 							</div>
 						{:else if item.type === 'model'}
 							<img
-								src={item?.data?.info?.meta?.profile_image_url ??
-									`${WEBUI_BASE_URL}/static/favicon.png`}
+								src={`${WEBUI_API_BASE_URL}/models/model/profile/image?id=${item.id}&lang=${$i18n.language}`}
 								alt={item?.data?.name ?? item.id}
 								class="rounded-full size-5 items-center mr-2"
 							/>

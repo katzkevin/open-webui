@@ -1,3 +1,4 @@
+import type { Writable } from 'svelte/store';
 import { v4 as uuidv4 } from 'uuid';
 import sha256 from 'js-sha256';
 import { WEBUI_BASE_URL } from '$lib/constants';
@@ -28,11 +29,27 @@ import hljs from 'highlight.js';
 
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+export const formatNumber = (num: number): string => {
+	return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(
+		num
+	);
+};
+
 function escapeRegExp(string: string): string {
 	return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export const replaceTokens = (content, sourceIds, char, user) => {
+// Replace tokens outside code blocks only
+export const replaceOutsideCode = (content: string, replacer: (str: string) => string) => {
+	return content
+		.split(/(```[\s\S]*?```|`[\s\S]*?`)/)
+		.map((segment) => {
+			return segment.startsWith('```') || segment.startsWith('`') ? segment : replacer(segment);
+		})
+		.join('');
+};
+
+export const replaceTokens = (content, char, user) => {
 	const tokens = [
 		{ regex: /{{char}}/gi, replacement: char },
 		{ regex: /{{user}}/gi, replacement: user },
@@ -47,49 +64,13 @@ export const replaceTokens = (content, sourceIds, char, user) => {
 		}
 	];
 
-	// Replace tokens outside code blocks only
-	const processOutsideCodeBlocks = (text, replacementFn) => {
-		return text
-			.split(/(```[\s\S]*?```|`[\s\S]*?`)/)
-			.map((segment) => {
-				return segment.startsWith('```') || segment.startsWith('`')
-					? segment
-					: replacementFn(segment);
-			})
-			.join('');
-	};
-
 	// Apply replacements
-	content = processOutsideCodeBlocks(content, (segment) => {
+	content = replaceOutsideCode(content, (segment) => {
 		tokens.forEach(({ regex, replacement }) => {
 			if (replacement !== undefined && replacement !== null) {
 				segment = segment.replace(regex, replacement);
 			}
 		});
-
-		if (Array.isArray(sourceIds)) {
-			// Match both [1], [2], and [1,2,3] forms
-			const multiRefRegex = /\[([\d,\s]+)\]/g;
-			segment = segment.replace(multiRefRegex, (match, group) => {
-				// Extract numbers like 1,2,3
-				const indices = group
-					.split(',')
-					.map((n) => parseInt(n.trim(), 10))
-					.filter((n) => !isNaN(n));
-
-				// Replace each index with a <source_id> tag
-				const sources = indices
-					.map((idx) => {
-						const sourceId = sourceIds[idx - 1];
-						return sourceId
-							? `<source_id data="${idx}" title="${encodeURIComponent(sourceId)}" />`
-							: `[${idx}]`;
-					})
-					.join('');
-
-				return sources;
-			});
-		}
 
 		return segment;
 	});
@@ -294,11 +275,50 @@ export const canvasPixelTest = () => {
 	return true;
 };
 
+let resizeImageWarmupDone = false;
+/**
+ * Draws an image to a canvas at the given dimensions and returns a data URL.
+ * On mobile, the first export uses toBlob (avoids black image on Android); later exports use toDataURL.
+ */
+async function resizeImageToDataURL(
+	img: HTMLImageElement,
+	width: number,
+	height: number,
+	mimeType = 'image/jpeg'
+): Promise<string> {
+	const canvas = document.createElement('canvas');
+	canvas.width = width;
+	canvas.height = height;
+	canvas.getContext('2d')?.drawImage(img, 0, 0, width, height);
+
+	const toDataURL = () => canvas.toDataURL(mimeType);
+
+	if (
+		!resizeImageWarmupDone &&
+		canvas.toBlob &&
+		/android|iphone|ipad|ipod/i.test(navigator?.userAgent)
+	) {
+		resizeImageWarmupDone = true;
+		return new Promise((resolve) => {
+			canvas.toBlob((blob) => {
+				if (!blob) {
+					resolve(toDataURL());
+					return;
+				}
+				const reader = new FileReader();
+				reader.onload = () => resolve(String(reader.result));
+				reader.onerror = () => resolve(toDataURL());
+				reader.readAsDataURL(blob);
+			}, mimeType);
+		});
+	}
+	return Promise.resolve(toDataURL());
+}
+
 export const compressImage = async (imageUrl, maxWidth, maxHeight) => {
 	return new Promise((resolve, reject) => {
 		const img = new Image();
-		img.onload = () => {
-			const canvas = document.createElement('canvas');
+		img.onload = async () => {
 			let width = img.width;
 			let height = img.height;
 
@@ -341,16 +361,8 @@ export const compressImage = async (imageUrl, maxWidth, maxHeight) => {
 				height = maxHeight;
 			}
 
-			canvas.width = width;
-			canvas.height = height;
-
-			const context = canvas.getContext('2d');
-			context.drawImage(img, 0, 0, width, height);
-
-			// Get compressed image URL
-			const mimeType = imageUrl.match(/^data:([^;]+);/)?.[1];
-			const compressedUrl = canvas.toDataURL(mimeType);
-			resolve(compressedUrl);
+			const mimeType = imageUrl.match(/^data:([^;]+);/)?.[1] ?? 'image/jpeg';
+			resolve(await resizeImageToDataURL(img, width, height, mimeType));
 		};
 		img.onerror = (error) => reject(error);
 		img.src = imageUrl;
@@ -865,19 +877,21 @@ export const cleanText = (content: string) => {
 };
 
 export const removeDetails = (content, types) => {
-	for (const type of types) {
-		content = content.replace(
-			new RegExp(`<details\\s+type="${type}"[^>]*>.*?<\\/details>`, 'gis'),
-			''
-		);
-	}
-
-	return content;
+	return replaceOutsideCode(content, (segment) => {
+		for (const type of types) {
+			segment = segment.replace(
+				new RegExp(`<details\\s+type="${type}"[^>]*>.*?<\\/details>`, 'gis'),
+				''
+			);
+		}
+		return segment;
+	});
 };
 
 export const removeAllDetails = (content) => {
-	content = content.replace(/<details[^>]*>.*?<\/details>/gis, '');
-	return content;
+	return replaceOutsideCode(content, (segment) => {
+		return segment.replace(/<details[^>]*>.*?<\/details>/gis, '');
+	});
 };
 
 export const processDetails = (content) => {
@@ -895,7 +909,9 @@ export const processDetails = (content) => {
 				attributes[attributeMatch[1]] = attributeMatch[2];
 			}
 
-			content = content.replace(match, `"${attributes.result}"`);
+			if (attributes.result) {
+				content = content.replace(match, unescapeHtml(attributes.result));
+			}
 		}
 	}
 
@@ -916,8 +932,8 @@ export const extractSentences = (text: string) => {
 		return placeholder;
 	});
 
-	// Split the modified text into sentences based on common punctuation marks, avoiding these blocks
-	let sentences = text.split(/(?<=[.!?])\s+/);
+	// Split the modified text into sentences based on common punctuation marks or newlines, avoiding these blocks
+	let sentences = text.split(/(?<=[.!?])\s+|\n+/);
 
 	// Restore code blocks and process sentences
 	sentences = sentences.map((sentence) => {
@@ -971,6 +987,16 @@ export const extractSentencesForAudio = (text: string) => {
 };
 
 export const getMessageContentParts = (content: string, splitOn: string = 'punctuation') => {
+	// Strip <details> blocks directly on the full string before any
+	// code-block-aware processing. removeAllDetails (which callers use)
+	// applies the regex via replaceOutsideCode, which splits on triple-
+	// backtick code fences first. If a <details> block contains code
+	// fences (e.g. reasoning with code examples), the opening and
+	// closing tags land in separate segments and the regex fails,
+	// leaking thinking content into TTS. Applying the strip here on
+	// the full string catches those cases. (Fixes #22197)
+	content = content.replace(/<details[^>]*>[\s\S]*?<\/details>/gi, '');
+
 	const messageContentParts: string[] = [];
 
 	switch (splitOn) {
@@ -995,9 +1021,10 @@ export const blobToFile = (blob, fileName) => {
 	return file;
 };
 
-export const getPromptVariables = (user_name, user_location) => {
+export const getPromptVariables = (user_name, user_location, user_email = '') => {
 	return {
 		'{{USER_NAME}}': user_name,
+		'{{USER_EMAIL}}': user_email || 'Unknown',
 		'{{USER_LOCATION}}': user_location || 'Unknown',
 		'{{CURRENT_DATETIME}}': getCurrentDateTime(),
 		'{{CURRENT_DATE}}': getFormattedDate(),
@@ -1067,6 +1094,22 @@ export const approximateToHumanReadable = (nanoseconds: number) => {
 	return results.reverse().join(' ');
 };
 
+// Month names used as i18n translation keys — must be English regardless of locale
+const MONTH_NAMES = [
+	'January',
+	'February',
+	'March',
+	'April',
+	'May',
+	'June',
+	'July',
+	'August',
+	'September',
+	'October',
+	'November',
+	'December'
+];
+
 export const getTimeRange = (timestamp) => {
 	const now = new Date();
 	const date = new Date(timestamp * 1000); // Convert Unix timestamp to milliseconds
@@ -1092,7 +1135,7 @@ export const getTimeRange = (timestamp) => {
 	} else if (diffDays <= 30) {
 		return 'Previous 30 days';
 	} else if (nowYear === dateYear) {
-		return date.toLocaleString('default', { month: 'long' });
+		return MONTH_NAMES[dateMonth];
 	} else {
 		return date.getFullYear().toString();
 	}
@@ -1185,19 +1228,19 @@ export const getWeekday = () => {
 };
 
 export const createMessagesList = (history, messageId) => {
-	if (messageId === null) {
-		return [];
+	const list = [];
+	let currentId = messageId;
+
+	while (currentId !== null && currentId !== undefined) {
+		const message = history.messages[currentId];
+		if (message === undefined) {
+			break;
+		}
+		list.push(message);
+		currentId = message.parentId;
 	}
 
-	const message = history.messages[messageId];
-	if (message === undefined) {
-		return [];
-	}
-	if (message?.parentId) {
-		return [...createMessagesList(history, message.parentId), message];
-	} else {
-		return [message];
-	}
+	return list.reverse();
 };
 
 export const formatFileSize = (size) => {
@@ -1271,6 +1314,11 @@ function resolveSchema(schemaRef, components, resolvedSchemas = new Set()) {
 export const convertOpenApiToToolPayload = (openApiSpec) => {
 	const toolPayload = [];
 
+	// Guard against invalid or non-OpenAPI specs (e.g., MCP-style configs)
+	if (!openApiSpec || !openApiSpec.paths) {
+		return toolPayload;
+	}
+
 	for (const [path, methods] of Object.entries(openApiSpec.paths)) {
 		for (const [method, operation] of Object.entries(methods)) {
 			if (operation?.operationId) {
@@ -1287,17 +1335,20 @@ export const convertOpenApiToToolPayload = (openApiSpec) => {
 				// Extract path and query parameters
 				if (operation.parameters) {
 					operation.parameters.forEach((param) => {
-						let description = param.schema.description || param.description || '';
-						if (param.schema.enum && Array.isArray(param.schema.enum)) {
-							description += `. Possible values: ${param.schema.enum.join(', ')}`;
+						const paramName = param?.name;
+						if (!paramName) return;
+						const paramSchema = param?.schema ?? {};
+						let description = paramSchema.description || param.description || '';
+						if (paramSchema.enum && Array.isArray(paramSchema.enum)) {
+							description += `. Possible values: ${paramSchema.enum.join(', ')}`;
 						}
-						tool.parameters.properties[param.name] = {
-							type: param.schema.type,
+						tool.parameters.properties[paramName] = {
+							type: paramSchema.type,
 							description: description
 						};
 
 						if (param.required) {
-							tool.parameters.required.push(param.name);
+							tool.parameters.required.push(paramName);
 						}
 					});
 				}
@@ -1541,12 +1592,29 @@ export const extractContentFromFile = async (file: File) => {
 		});
 	}
 
+	async function extractDocxText(file: File) {
+		const [arrayBuffer, { default: mammoth }] = await Promise.all([
+			file.arrayBuffer(),
+			import('mammoth')
+		]);
+		const result = await mammoth.extractRawText({ arrayBuffer });
+		return result.value; // plain text
+	}
+
 	const type = file.type || '';
 	const ext = getExtension(file.name);
 
 	// PDF check
 	if (type === 'application/pdf' || ext === '.pdf') {
 		return await extractPdfText(file);
+	}
+
+	// DOCX check
+	if (
+		type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+		ext === '.docx'
+	) {
+		return await extractDocxText(file);
 	}
 
 	// Text check (plain or common text-based)
@@ -1627,6 +1695,10 @@ export const renderVegaVisualization = async (spec: string, i18n?: any) => {
 };
 
 export const getCodeBlockContents = (content: string): object => {
+	// Strip thinking/reasoning and other detail blocks before extracting code
+	// to prevent code inside <details type="reasoning"> from being treated as artifacts
+	content = removeAllDetails(content);
+
 	const codeBlockContents = content.match(/```[\s\S]*?```/g);
 
 	let codeBlocks = [];
@@ -1654,6 +1726,10 @@ export const getCodeBlockContents = (content: string): object => {
 			}
 		});
 	} else {
+		// Remove details tags from the content to check if there are any code blocks
+		// hidden in the details tags (e.g. reasoning, etc.)
+		content = removeAllDetails(content);
+
 		const inlineHtml = content.match(/<html>[\s\S]*?<\/html>/gi);
 		const inlineCss = content.match(/<style>[\s\S]*?<\/style>/gi);
 		const inlineJs = content.match(/<script>[\s\S]*?<\/script>/gi);
@@ -1684,4 +1760,42 @@ export const getCodeBlockContents = (content: string): object => {
 		css: cssContent.trim(),
 		js: jsContent.trim()
 	};
+};
+export const parseFrontmatter = (content) => {
+	const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
+	if (match) {
+		const frontmatter = {};
+		match[1].split('\n').forEach((line) => {
+			const [key, ...value] = line.split(':');
+			if (key && value) {
+				frontmatter[key.trim()] = value
+					.join(':')
+					.trim()
+					.replace(/^["']|["']$/g, '');
+			}
+		});
+		return frontmatter;
+	}
+	return {};
+};
+
+export const formatSkillName = (name) => {
+	return name.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+};
+
+/**
+ * Open the file browser panel to display a specific file.
+ * Used by both the direct tool execution path (client-side) and the
+ * backend event path (server-side) so behaviour is consistent.
+ *
+ * Stores are passed in by the caller to keep this utility pure.
+ */
+export const displayFileHandler = (
+	path: string,
+	stores: { showControls: Writable<boolean>; showFileNavPath: Writable<string | null> }
+) => {
+	if (path) {
+		stores.showControls.set(true);
+		stores.showFileNavPath.set(path);
+	}
 };

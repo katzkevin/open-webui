@@ -18,14 +18,15 @@
 		updateFolderIsExpandedById,
 		updateFolderById,
 		updateFolderParentIdById,
-		getFolderById
+		getFolderById,
+		createNewFolder
 	} from '$lib/apis/folders';
 	import {
 		getChatById,
 		getChatsByFolderId,
 		getChatListByFolderId,
-		importChat,
-		updateChatFolderIdById
+		updateChatFolderIdById,
+		importChats
 	} from '$lib/apis/chats';
 
 	import ChevronDown from '../../icons/ChevronDown.svelte';
@@ -52,6 +53,8 @@
 
 	export let className = '';
 
+	export let deleteFolderContents = true;
+
 	export let parentDragged = false;
 
 	export let onDelete = (e) => {};
@@ -61,6 +64,9 @@
 
 	let showFolderModal = false;
 	let edit = false;
+
+	let showCreateSubFolderModal = false;
+	let createSubFolderParentId = null;
 
 	let draggedOver = false;
 	let dragged = false;
@@ -152,15 +158,16 @@
 									return null;
 								});
 								if (!chat && item) {
-									chat = await importChat(
-										localStorage.token,
-										item.chat,
-										item?.meta ?? {},
-										false,
-										null,
-										item?.created_at ?? null,
-										item?.updated_at ?? null
-									).catch((error) => {
+									chat = await importChats(localStorage.token, [
+										{
+											chat: item.chat,
+											meta: item?.meta ?? {},
+											pinned: false,
+											folder_id: null,
+											created_at: item?.created_at ?? null,
+											updated_at: item?.updated_at ?? null
+										}
+									]).catch((error) => {
 										toast.error(`${error}`);
 										return null;
 									});
@@ -287,10 +294,12 @@
 	let showDeleteConfirm = false;
 
 	const deleteHandler = async () => {
-		const res = await deleteFolderById(localStorage.token, folderId).catch((error) => {
-			toast.error(`${error}`);
-			return null;
-		});
+		const res = await deleteFolderById(localStorage.token, folderId, deleteFolderContents).catch(
+			(error) => {
+				toast.error(`${error}`);
+				return null;
+			}
+		);
 
 		if (res) {
 			toast.success($i18n.t('Folder deleted successfully'));
@@ -369,17 +378,6 @@
 				toast.error(`${error}`);
 				return [];
 			});
-
-			if ($selectedFolder?.id === folderId) {
-				const folder = await getFolderById(localStorage.token, folderId).catch((error) => {
-					toast.error(`${error}`);
-					return null;
-				});
-
-				if (folder) {
-					await selectedFolder.set(folder);
-				}
-			}
 		} else {
 			chats = null;
 		}
@@ -420,6 +418,30 @@
 
 		saveAs(blob, `folder-${folders[folderId].name}-export-${Date.now()}.json`);
 	};
+
+	const createSubFolderHandler = async ({ name, meta, data, parent_id }) => {
+		if (name === '') {
+			toast.error($i18n.t('Folder name cannot be empty.'));
+			return;
+		}
+
+		name = name.trim();
+
+		const res = await createNewFolder(localStorage.token, {
+			name,
+			data,
+			meta,
+			parent_id
+		}).catch((error) => {
+			toast.error(`${error}`);
+			return null;
+		});
+
+		if (res) {
+			toast.success($i18n.t('Folder created successfully'));
+			dispatch('update');
+		}
+	};
 </script>
 
 <DeleteConfirmDialog
@@ -429,16 +451,32 @@
 		deleteHandler();
 	}}
 >
-	<div class=" text-sm text-gray-700 dark:text-gray-300 flex-1 line-clamp-3">
-		{@html DOMPurify.sanitize(
-			$i18n.t('This will delete <strong>{{NAME}}</strong> and <strong>all its contents</strong>.', {
+	<div class=" text-sm text-gray-700 dark:text-gray-300 flex-1 line-clamp-3 mb-2">
+		<!-- {$i18n.t('This will delete <strong>{{NAME}}</strong> and <strong>all its contents</strong>.', {
 				NAME: folders[folderId].name
-			})
-		)}
+			})} -->
+
+		{$i18n.t(`Are you sure you want to delete "{{NAME}}"?`, {
+			NAME: folders[folderId].name
+		})}
+	</div>
+
+	<div class="flex items-center gap-1.5">
+		<input type="checkbox" bind:checked={deleteFolderContents} />
+
+		<div class="text-xs text-gray-500">
+			{$i18n.t('Delete all contents inside this folder')}
+		</div>
 	</div>
 </DeleteConfirmDialog>
 
 <FolderModal bind:show={showFolderModal} edit={true} {folderId} onSubmit={updateHandler} />
+
+<FolderModal
+	bind:show={showCreateSubFolderModal}
+	parentId={createSubFolderParentId}
+	onSubmit={createSubFolderHandler}
+/>
 
 {#if dragged && x && y}
 	<DragGhost {x} {y}>
@@ -589,6 +627,10 @@
 						onExport={() => {
 							exportHandler();
 						}}
+						onCreateSub={() => {
+							createSubFolderParentId = folderId;
+							showCreateSubFolderModal = true;
+						}}
 					>
 						<div class="p-1 dark:hover:bg-gray-850 rounded-lg touch-auto">
 							<EllipsisHorizontal className="size-4" strokeWidth="2.5" />
@@ -639,6 +681,7 @@
 						<ChatItem
 							id={chat.id}
 							title={chat.title}
+							createdAt={chat.created_at}
 							{shiftKey}
 							on:change={(e) => {
 								dispatch('change', e.detail);

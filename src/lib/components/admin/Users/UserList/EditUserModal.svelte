@@ -72,6 +72,7 @@
 			<div class=" text-lg font-medium self-center">{$i18n.t('Edit User')}</div>
 			<button
 				class="self-center"
+				aria-label={$i18n.t('Close')}
 				on:click={() => {
 					show = false;
 				}}
@@ -138,8 +139,9 @@
 
 										<div class="flex-1">
 											<select
-												class="w-full dark:bg-gray-900 text-sm bg-transparent disabled:text-gray-500 dark:disabled:text-gray-500 outline-hidden"
+												class="w-full text-sm bg-transparent disabled:text-gray-500 dark:disabled:text-gray-500 outline-hidden"
 												bind:value={_user.role}
+												aria-label={$i18n.t('Role')}
 												disabled={_user.id == sessionUser.id}
 												required
 											>
@@ -158,6 +160,7 @@
 												class="w-full text-sm bg-transparent outline-hidden"
 												type="text"
 												bind:value={_user.name}
+												aria-label={$i18n.t('Name')}
 												placeholder={$i18n.t('Enter Your Name')}
 												autocomplete="off"
 												required
@@ -173,6 +176,7 @@
 												class="w-full text-sm bg-transparent disabled:text-gray-500 dark:disabled:text-gray-500 outline-hidden"
 												type="email"
 												bind:value={_user.email}
+												aria-label={$i18n.t('Email')}
 												placeholder={$i18n.t('Enter Your Email')}
 												autocomplete="off"
 												required
@@ -180,12 +184,17 @@
 										</div>
 									</div>
 
-									{#if _user?.oauth_sub}
+									{#if _user?.oauth}
 										<div class="flex flex-col w-full">
 											<div class=" mb-1 text-xs text-gray-500">{$i18n.t('OAuth ID')}</div>
 
-											<div class="flex-1 text-sm break-all mb-1">
-												{_user.oauth_sub ?? ''}
+											<div class="flex-1 text-sm break-all mb-1 flex flex-col space-y-1">
+												{#each Object.keys(_user.oauth) as key}
+													<div>
+														<span class="text-gray-500">{key}</span>
+														<span class="">{_user.oauth[key]?.sub}</span>
+													</div>
+												{/each}
 											</div>
 										</div>
 									{/if}
@@ -197,6 +206,7 @@
 											<SensitiveInput
 												class="w-full text-sm bg-transparent outline-hidden"
 												type="password"
+												aria-label={$i18n.t('New Password')}
 												placeholder={$i18n.t('Enter New Password')}
 												bind:value={_user.password}
 												autocomplete="new-password"

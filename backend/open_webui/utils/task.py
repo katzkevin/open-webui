@@ -8,12 +8,9 @@ import uuid
 
 from open_webui.utils.misc import get_last_user_message, get_messages_content
 
-from open_webui.env import SRC_LOG_LEVELS
 from open_webui.config import DEFAULT_RAG_TEMPLATE
 
-
 log = logging.getLogger(__name__)
-log.setLevel(SRC_LOG_LEVELS["RAG"])
 
 
 def get_task_model_id(
@@ -71,6 +68,7 @@ def prompt_template(template: str, user: Optional[Any] = None) -> str:
 
             USER_VARIABLES = {
                 "name": str(user.get("name")),
+                "email": str(user.get("email")),
                 "location": str(user_info.get("location")),
                 "bio": str(user.get("bio")),
                 "gender": str(user.get("gender")),
@@ -94,6 +92,9 @@ def prompt_template(template: str, user: Optional[Any] = None) -> str:
     template = template.replace("{{CURRENT_WEEKDAY}}", formatted_weekday)
 
     template = template.replace("{{USER_NAME}}", USER_VARIABLES.get("name", "Unknown"))
+    template = template.replace(
+        "{{USER_EMAIL}}", USER_VARIABLES.get("email", "Unknown")
+    )
     template = template.replace("{{USER_BIO}}", USER_VARIABLES.get("bio", "Unknown"))
     template = template.replace(
         "{{USER_GENDER}}", USER_VARIABLES.get("gender", "Unknown")
@@ -141,41 +142,121 @@ def replace_prompt_variable(template: str, prompt: str) -> str:
     return template
 
 
+def truncate_content(content: str, max_chars: int, mode: str = "middletruncate") -> str:
+    """Truncate a string to max_chars using the specified mode.
+
+    Modes:
+        - middletruncate: keep beginning and end, join with '...'
+        - start: keep first max_chars characters
+        - end: keep last max_chars characters
+    """
+    if not content or len(content) <= max_chars:
+        return content
+
+    if mode == "start":
+        return content[:max_chars]
+    elif mode == "end":
+        return content[-max_chars:]
+    else:  # middletruncate
+        half = max_chars // 2
+        return f"{content[:half]}...{content[-(max_chars - half):]}"
+
+
+def apply_content_filter(messages: list[dict], filter_str: str) -> list[dict]:
+    """Apply a content filter to each message's content.
+
+    filter_str is like 'middletruncate:500', 'start:200', or 'end:200'.
+    Returns a new list with truncated content (original messages are not mutated).
+    """
+    parts = filter_str.split(":")
+    if len(parts) != 2:
+        return messages
+
+    mode = parts[0].lower()
+    try:
+        max_chars = int(parts[1])
+    except ValueError:
+        return messages
+
+    if mode not in ("middletruncate", "start", "end"):
+        return messages
+
+    result = []
+    for msg in messages:
+        new_msg = dict(msg)
+        if isinstance(new_msg.get("content"), str):
+            new_msg["content"] = truncate_content(new_msg["content"], max_chars, mode)
+        elif isinstance(new_msg.get("content"), list):
+            new_content = []
+            for item in new_msg["content"]:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    new_item = dict(item)
+                    new_item["text"] = truncate_content(
+                        item.get("text", ""), max_chars, mode
+                    )
+                    new_content.append(new_item)
+                else:
+                    new_content.append(item)
+            new_msg["content"] = new_content
+        result.append(new_msg)
+    return result
+
+
 def replace_messages_variable(
     template: str, messages: Optional[list[dict]] = None
 ) -> str:
     def replacement_function(match):
-        full_match = match.group(0)
-        start_length = match.group(1)
-        end_length = match.group(2)
-        middle_length = match.group(3)
+        # Groups: (1) filter for bare MESSAGES
+        #         (2) START count, (3) filter for START
+        #         (4) END count,   (5) filter for END
+        #         (6) MIDDLE count,(7) filter for MIDDLE
+        bare_filter = match.group(1)
+        start_length = match.group(2)
+        start_filter = match.group(3)
+        end_length = match.group(4)
+        end_filter = match.group(5)
+        middle_length = match.group(6)
+        middle_filter = match.group(7)
+
         # If messages is None, handle it as an empty list
         if messages is None:
             return ""
 
-        # Process messages based on the number of messages required
-        if full_match == "{{MESSAGES}}":
-            return get_messages_content(messages)
-        elif start_length is not None:
-            return get_messages_content(messages[: int(start_length)])
+        # Select messages based on the variant
+        if start_length is not None:
+            selected = messages[: int(start_length)]
+            content_filter = start_filter
         elif end_length is not None:
-            return get_messages_content(messages[-int(end_length) :])
+            selected = messages[-int(end_length) :]
+            content_filter = end_filter
         elif middle_length is not None:
             mid = int(middle_length)
-
             if len(messages) <= mid:
-                return get_messages_content(messages)
-            # Handle middle truncation: split to get start and end portions of the messages list
-            half = mid // 2
-            start_msgs = messages[:half]
-            end_msgs = messages[-half:] if mid % 2 == 0 else messages[-(half + 1) :]
-            formatted_start = get_messages_content(start_msgs)
-            formatted_end = get_messages_content(end_msgs)
-            return f"{formatted_start}\n{formatted_end}"
-        return ""
+                selected = messages
+            else:
+                half = mid // 2
+                start_msgs = messages[:half]
+                end_msgs = messages[-half:] if mid % 2 == 0 else messages[-(half + 1) :]
+                selected = start_msgs + end_msgs
+            content_filter = middle_filter
+        else:
+            # Bare {{MESSAGES}} or {{MESSAGES|filter}}
+            selected = messages
+            content_filter = bare_filter
+
+        # Apply content filter if present
+        if content_filter:
+            selected = apply_content_filter(selected, content_filter)
+
+        return get_messages_content(selected)
 
     template = re.sub(
-        r"{{MESSAGES}}|{{MESSAGES:START:(\d+)}}|{{MESSAGES:END:(\d+)}}|{{MESSAGES:MIDDLETRUNCATE:(\d+)}}",
+        r"(?:"
+        r"\{\{MESSAGES(?:\|(\w+:\d+))?\}\}"
+        r"|\{\{MESSAGES:START:(\d+)(?:\|(\w+:\d+))?\}\}"
+        r"|\{\{MESSAGES:END:(\d+)(?:\|(\w+:\d+))?\}\}"
+        r"|\{\{MESSAGES:MIDDLETRUNCATE:(\d+)(?:\|(\w+:\d+))?\}\}"
+        r")",
         replacement_function,
         template,
     )
@@ -208,20 +289,21 @@ def rag_template(template: str, context: str, query: str):
     if "[query]" in context:
         query_placeholder = "{{QUERY" + str(uuid.uuid4()) + "}}"
         template = template.replace("[query]", query_placeholder)
-        query_placeholders.append(query_placeholder)
+        query_placeholders.append((query_placeholder, "[query]"))
 
     if "{{QUERY}}" in context:
         query_placeholder = "{{QUERY" + str(uuid.uuid4()) + "}}"
         template = template.replace("{{QUERY}}", query_placeholder)
-        query_placeholders.append(query_placeholder)
+        query_placeholders.append((query_placeholder, "{{QUERY}}"))
 
     template = template.replace("[context]", context)
     template = template.replace("{{CONTEXT}}", context)
+
     template = template.replace("[query]", query)
     template = template.replace("{{QUERY}}", query)
 
-    for query_placeholder in query_placeholders:
-        template = template.replace(query_placeholder, query)
+    for query_placeholder, original_placeholder in query_placeholders:
+        template = template.replace(query_placeholder, original_placeholder)
 
     return template
 

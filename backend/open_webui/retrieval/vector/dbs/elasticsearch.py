@@ -1,3 +1,7 @@
+"""
+NOTE: This vector database integration is community-supported and maintained on a best-effort basis.
+"""
+
 from elasticsearch import Elasticsearch, BadRequestError
 from typing import Optional
 import ssl
@@ -153,7 +157,11 @@ class ElasticsearchClient(VectorDBBase):
 
     # Status: works
     def search(
-        self, collection_name: str, vectors: list[list[float]], limit: int
+        self,
+        collection_name: str,
+        vectors: list[list[float]],
+        filter: Optional[dict] = None,
+        limit: int = 10,
     ) -> Optional[SearchResult]:
         query = {
             "size": limit,

@@ -33,12 +33,10 @@ from open_webui.config import (
     DEFAULT_AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE,
     DEFAULT_EMOJI_GENERATION_PROMPT_TEMPLATE,
     DEFAULT_MOA_GENERATION_PROMPT_TEMPLATE,
+    DEFAULT_VOICE_MODE_PROMPT_TEMPLATE,
 )
-from open_webui.env import SRC_LOG_LEVELS
-
 
 log = logging.getLogger(__name__)
-log.setLevel(SRC_LOG_LEVELS["MODELS"])
 
 router = APIRouter()
 
@@ -48,6 +46,21 @@ router = APIRouter()
 # Task Endpoints
 #
 ##################################
+
+
+class ActiveChatsForm(BaseModel):
+    chat_ids: list[str]
+
+
+@router.post("/active/chats")
+async def check_active_chats(
+    request: Request, form_data: ActiveChatsForm, user=Depends(get_verified_user)
+):
+    """Check which chat IDs have active tasks."""
+    from open_webui.tasks import get_active_chat_ids
+
+    active = await get_active_chat_ids(request.app.state.redis, form_data.chat_ids)
+    return {"active_chat_ids": active}
 
 
 @router.get("/config")
@@ -68,6 +81,7 @@ async def get_task_config(request: Request, user=Depends(get_verified_user)):
         "ENABLE_RETRIEVAL_QUERY_GENERATION": request.app.state.config.ENABLE_RETRIEVAL_QUERY_GENERATION,
         "QUERY_GENERATION_PROMPT_TEMPLATE": request.app.state.config.QUERY_GENERATION_PROMPT_TEMPLATE,
         "TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE": request.app.state.config.TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE,
+        "VOICE_MODE_PROMPT_TEMPLATE": request.app.state.config.VOICE_MODE_PROMPT_TEMPLATE,
     }
 
 
@@ -87,6 +101,7 @@ class TaskConfigForm(BaseModel):
     ENABLE_RETRIEVAL_QUERY_GENERATION: bool
     QUERY_GENERATION_PROMPT_TEMPLATE: str
     TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE: str
+    VOICE_MODE_PROMPT_TEMPLATE: Optional[str]
 
 
 @router.post("/config/update")
@@ -136,6 +151,10 @@ async def update_task_config(
         form_data.TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE
     )
 
+    request.app.state.config.VOICE_MODE_PROMPT_TEMPLATE = (
+        form_data.VOICE_MODE_PROMPT_TEMPLATE
+    )
+
     return {
         "TASK_MODEL": request.app.state.config.TASK_MODEL,
         "TASK_MODEL_EXTERNAL": request.app.state.config.TASK_MODEL_EXTERNAL,
@@ -152,6 +171,7 @@ async def update_task_config(
         "ENABLE_RETRIEVAL_QUERY_GENERATION": request.app.state.config.ENABLE_RETRIEVAL_QUERY_GENERATION,
         "QUERY_GENERATION_PROMPT_TEMPLATE": request.app.state.config.QUERY_GENERATION_PROMPT_TEMPLATE,
         "TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE": request.app.state.config.TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE,
+        "VOICE_MODE_PROMPT_TEMPLATE": request.app.state.config.VOICE_MODE_PROMPT_TEMPLATE,
     }
 
 

@@ -23,6 +23,13 @@
 		changelog = await getChangelog();
 	};
 
+	const closeModal = async () => {
+		localStorage.version = $config.version;
+		await settings.set({ ...$settings, ...{ version: $config.version } });
+		await updateUserSettings(localStorage.token, { ui: $settings });
+		show = false;
+	};
+
 	$: if (show) {
 		init();
 	}
@@ -31,22 +38,13 @@
 <Modal bind:show size="xl">
 	<div class="px-6 pt-5 dark:text-white text-black">
 		<div class="flex justify-between items-start">
-			<div class="text-xl font-medium">
+			<h2 class="text-xl font-medium m-0">
 				{$i18n.t("What's New in")}
 				{$WEBUI_NAME}
 				<Confetti x={[-1, -0.25]} y={[0, 0.5]} />
-			</div>
-			<button
-				class="self-center"
-				on:click={() => {
-					localStorage.version = $config.version;
-					show = false;
-				}}
-				aria-label={$i18n.t('Close')}
-			>
-				<XMark className={'size-5'}>
-					<p class="sr-only">{$i18n.t('Close')}</p>
-				</XMark>
+			</h2>
+			<button class="self-center" on:click={closeModal} aria-label={$i18n.t('Close')}>
+				<XMark className={'size-5'} />
 			</button>
 		</div>
 		<div class="flex items-center mt-1">
@@ -64,9 +62,9 @@
 				{#if changelog}
 					{#each Object.keys(changelog) as version}
 						<div class=" mb-3 pr-2">
-							<div class="font-semibold text-xl mb-1 dark:text-white">
+							<h3 class="font-semibold text-xl mb-1 dark:text-white m-0">
 								v{version} - {changelog[version].date}
-							</div>
+							</h3>
 
 							<hr class="border-gray-50/50 dark:border-gray-850/50 my-2" />
 
@@ -102,12 +100,7 @@
 		</div>
 		<div class="flex justify-end pt-3 text-sm font-medium">
 			<button
-				on:click={async () => {
-					localStorage.version = $config.version;
-					await settings.set({ ...$settings, ...{ version: $config.version } });
-					await updateUserSettings(localStorage.token, { ui: $settings });
-					show = false;
-				}}
+				on:click={closeModal}
 				class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full"
 			>
 				<span class="relative">{$i18n.t("Okay, Let's Go!")}</span>
