@@ -53,6 +53,16 @@ class Vector:
                 from open_webui.retrieval.vector.dbs.pgvector import PgvectorClient
 
                 return PgvectorClient()
+            case VectorType.OPENGAUSS:
+                from open_webui.retrieval.vector.dbs.opengauss import OpenGaussClient
+
+                return OpenGaussClient()
+            case VectorType.MARIADB_VECTOR:
+                from open_webui.retrieval.vector.dbs.mariadb_vector import (
+                    MariaDBVectorClient,
+                )
+
+                return MariaDBVectorClient()
             case VectorType.ELASTICSEARCH:
                 from open_webui.retrieval.vector.dbs.elasticsearch import (
                     ElasticsearchClient,

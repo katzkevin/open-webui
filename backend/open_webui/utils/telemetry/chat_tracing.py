@@ -15,7 +15,6 @@ from opentelemetry.trace import Span, Status, StatusCode, SpanKind
 
 from open_webui.env import ENABLE_OTEL_TRACES
 
-
 # Module-level tracer - lazy initialization
 _tracer: Optional[trace.Tracer] = None
 
@@ -174,7 +173,9 @@ class StreamingTTFTTracker:
         if span and is_tracing_enabled():
             if "ttft_ms" in metrics:
                 span.set_attribute("chat.ttft_ms", metrics["ttft_ms"])
-            span.set_attribute("chat.streaming_duration_ms", metrics["streaming_duration_ms"])
+            span.set_attribute(
+                "chat.streaming_duration_ms", metrics["streaming_duration_ms"]
+            )
             span.set_attribute("chat.chunk_count", metrics["chunk_count"])
 
         return metrics

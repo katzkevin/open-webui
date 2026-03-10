@@ -42,6 +42,7 @@
 	let RAG_EMBEDDING_MODEL = '';
 	let RAG_EMBEDDING_BATCH_SIZE = 1;
 	let ENABLE_ASYNC_EMBEDDING = true;
+	let RAG_EMBEDDING_CONCURRENT_REQUESTS = 0;
 
 	let rerankingModel = '';
 
@@ -104,7 +105,8 @@
 			RAG_EMBEDDING_ENGINE,
 			RAG_EMBEDDING_MODEL,
 			RAG_EMBEDDING_BATCH_SIZE,
-			ENABLE_ASYNC_EMBEDDING
+			ENABLE_ASYNC_EMBEDDING,
+			RAG_EMBEDDING_CONCURRENT_REQUESTS
 		});
 
 		updateEmbeddingModelLoading = true;
@@ -113,6 +115,7 @@
 			RAG_EMBEDDING_MODEL: RAG_EMBEDDING_MODEL,
 			RAG_EMBEDDING_BATCH_SIZE: RAG_EMBEDDING_BATCH_SIZE,
 			ENABLE_ASYNC_EMBEDDING: ENABLE_ASYNC_EMBEDDING,
+			RAG_EMBEDDING_CONCURRENT_REQUESTS: RAG_EMBEDDING_CONCURRENT_REQUESTS,
 			ollama_config: {
 				key: OllamaKey,
 				url: OllamaUrl
@@ -218,6 +221,12 @@
 
 		const res = await updateRAGConfig(localStorage.token, {
 			...RAGConfig,
+			// Convert null (from cleared number inputs) to empty string so the backend
+			// can distinguish "clear this field" from "don't change this field"
+			FILE_MAX_SIZE: RAGConfig.FILE_MAX_SIZE ?? '',
+			FILE_MAX_COUNT: RAGConfig.FILE_MAX_COUNT ?? '',
+			FILE_IMAGE_COMPRESSION_WIDTH: RAGConfig.FILE_IMAGE_COMPRESSION_WIDTH ?? '',
+			FILE_IMAGE_COMPRESSION_HEIGHT: RAGConfig.FILE_IMAGE_COMPRESSION_HEIGHT ?? '',
 			ALLOWED_FILE_EXTENSIONS: RAGConfig.ALLOWED_FILE_EXTENSIONS.split(',')
 				.map((ext) => ext.trim())
 				.filter((ext) => ext !== ''),
@@ -241,6 +250,7 @@
 			RAG_EMBEDDING_MODEL = embeddingConfig.RAG_EMBEDDING_MODEL;
 			RAG_EMBEDDING_BATCH_SIZE = embeddingConfig.RAG_EMBEDDING_BATCH_SIZE ?? 1;
 			ENABLE_ASYNC_EMBEDDING = embeddingConfig.ENABLE_ASYNC_EMBEDDING ?? true;
+			RAG_EMBEDDING_CONCURRENT_REQUESTS = embeddingConfig.RAG_EMBEDDING_CONCURRENT_REQUESTS ?? 0;
 
 			OpenAIKey = embeddingConfig.openai_config.key;
 			OpenAIUrl = embeddingConfig.openai_config.url;
@@ -336,7 +346,7 @@
 							</div>
 							<div class="">
 								<select
-									class="dark:bg-gray-900 w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
+									class="w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
 									bind:value={RAGConfig.CONTENT_EXTRACTION_ENGINE}
 								>
 									<option value="">{$i18n.t('Default')}</option>
@@ -359,6 +369,30 @@
 									</div>
 									<div class="flex items-center relative">
 										<Switch bind:state={RAGConfig.PDF_EXTRACT_IMAGES} />
+									</div>
+								</div>
+							</div>
+
+							<div class="flex w-full mt-2">
+								<div class="flex-1 flex justify-between">
+									<div class=" self-center text-xs font-medium">
+										<Tooltip
+											content={$i18n.t(
+												'Page mode creates one document per page. Single mode combines all pages into one document for better chunking across page boundaries.'
+											)}
+											placement="top-start"
+										>
+											{$i18n.t('PDF Loader Mode')}
+										</Tooltip>
+									</div>
+									<div class="">
+										<select
+											class="w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
+											bind:value={RAGConfig.PDF_LOADER_MODE}
+										>
+											<option value="page">{$i18n.t('Page')}</option>
+											<option value="single">{$i18n.t('Single')}</option>
+										</select>
 									</div>
 								</div>
 							</div>
@@ -524,7 +558,7 @@
 								</div>
 								<div class="">
 									<select
-										class="dark:bg-gray-900 w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
+										class="w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
 										bind:value={RAGConfig.DATALAB_MARKER_OUTPUT_FORMAT}
 									>
 										<option value="markdown">{$i18n.t('Markdown')}</option>
@@ -631,7 +665,7 @@
 										{$i18n.t('API Mode')}
 									</div>
 									<select
-										class="dark:bg-gray-900 w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden"
+										class="w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden"
 										bind:value={RAGConfig.MINERU_API_MODE}
 										on:change={() => {
 											// Auto-update URL when switching modes if it's empty or matches the opposite mode's default
@@ -670,8 +704,22 @@
 								<SensitiveInput
 									placeholder={$i18n.t('Enter MinerU API Key')}
 									bind:value={RAGConfig.MINERU_API_KEY}
-									required={false}
 								/>
+							</div>
+
+							<div class="flex w-full mt-2">
+								<div class="flex-1 flex justify-between">
+									<div class="self-center text-xs font-medium">
+										{$i18n.t('API Timeout')}
+									</div>
+									<input
+										class="w-16 text-sm bg-transparent outline-hidden text-right"
+										type="number"
+										min="1"
+										bind:value={RAGConfig.MINERU_API_TIMEOUT}
+										placeholder="60"
+									/>
+								</div>
 							</div>
 
 							<!-- Parameters -->
@@ -723,13 +771,28 @@
 							<div class=" self-center text-xs font-medium">{$i18n.t('Text Splitter')}</div>
 							<div class="flex items-center relative">
 								<select
-									class="dark:bg-gray-900 w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
+									class="w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
 									bind:value={RAGConfig.TEXT_SPLITTER}
 								>
 									<option value="">{$i18n.t('Default')} ({$i18n.t('Character')})</option>
 									<option value="token">{$i18n.t('Token')} ({$i18n.t('Tiktoken')})</option>
-									<option value="markdown_header">{$i18n.t('Markdown (Header)')}</option>
 								</select>
+							</div>
+						</div>
+
+						<div class="  mb-2.5 flex w-full justify-between">
+							<div class=" self-center text-xs font-medium">
+								<Tooltip
+									placement="top-start"
+									content={$i18n.t(
+										'Split documents by markdown headers before applying character/token splitting.'
+									)}
+								>
+									{$i18n.t('Markdown Header Text Splitter')}
+								</Tooltip>
+							</div>
+							<div class="flex items-center relative">
+								<Switch bind:state={RAGConfig.ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER} />
 							</div>
 						</div>
 
@@ -769,6 +832,35 @@
 								</div>
 							</div>
 						</div>
+
+						{#if RAGConfig.ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER}
+							<div class="  mb-2.5 flex w-full justify-between">
+								<div class=" flex gap-1.5 w-full">
+									<div class="w-full">
+										<div class="self-center text-xs font-medium min-w-fit mb-1">
+											<Tooltip
+												placement="top-start"
+												content={$i18n.t(
+													'Chunks smaller than this threshold will be merged with neighboring chunks when possible. Set to 0 to disable merging.'
+												)}
+											>
+												{$i18n.t('Chunk Min Size Target')}
+											</Tooltip>
+										</div>
+										<div class="self-center">
+											<input
+												class="w-full rounded-lg py-1.5 px-4 text-sm bg-gray-50 dark:text-gray-300 dark:bg-gray-850 outline-hidden"
+												type="number"
+												placeholder={$i18n.t('Enter Chunk Min Size Target')}
+												bind:value={RAGConfig.CHUNK_MIN_SIZE_TARGET}
+												autocomplete="off"
+												min="0"
+											/>
+										</div>
+									</div>
+								</div>
+							</div>
+						{/if}
 					{/if}
 				</div>
 
@@ -785,7 +877,7 @@
 								</div>
 								<div class="flex items-center relative">
 									<select
-										class="dark:bg-gray-900 w-fit pr-8 rounded-sm px-2 p-1 text-xs bg-transparent outline-hidden text-right"
+										class="w-fit pr-8 rounded-sm px-2 p-1 text-xs bg-transparent outline-hidden text-right"
 										bind:value={RAG_EMBEDDING_ENGINE}
 										placeholder={$i18n.t('Select an embedding model engine')}
 										on:change={(e) => {
@@ -928,24 +1020,24 @@
 							</div>
 						</div>
 
-						{#if RAG_EMBEDDING_ENGINE === 'ollama' || RAG_EMBEDDING_ENGINE === 'openai' || RAG_EMBEDDING_ENGINE === 'azure_openai'}
-							<div class="  mb-2.5 flex w-full justify-between">
-								<div class=" self-center text-xs font-medium">
-									{$i18n.t('Embedding Batch Size')}
-								</div>
-
-								<div class="">
-									<input
-										bind:value={RAG_EMBEDDING_BATCH_SIZE}
-										type="number"
-										class=" bg-transparent text-center w-14 outline-none"
-										min="-2"
-										max="16000"
-										step="1"
-									/>
-								</div>
+						<div class="  mb-2.5 flex w-full justify-between">
+							<div class=" self-center text-xs font-medium">
+								{$i18n.t('Embedding Batch Size')}
 							</div>
 
+							<div class="">
+								<input
+									bind:value={RAG_EMBEDDING_BATCH_SIZE}
+									type="number"
+									class=" bg-transparent text-center w-14 outline-none"
+									min="-2"
+									max="16000"
+									step="1"
+								/>
+							</div>
+						</div>
+
+						{#if RAG_EMBEDDING_ENGINE === 'ollama' || RAG_EMBEDDING_ENGINE === 'openai' || RAG_EMBEDDING_ENGINE === 'azure_openai'}
 							<div class="  mb-2.5 flex w-full justify-between">
 								<div class="self-center text-xs font-medium">
 									<Tooltip
@@ -959,6 +1051,28 @@
 								</div>
 								<div class="flex items-center relative">
 									<Switch bind:state={ENABLE_ASYNC_EMBEDDING} />
+								</div>
+							</div>
+
+							<div class="  mb-2.5 flex w-full justify-between">
+								<div class="self-center text-xs font-medium">
+									<Tooltip
+										content={$i18n.t(
+											'Limits the number of concurrent embedding requests. Set to 0 for unlimited.'
+										)}
+										placement="top-start"
+									>
+										{$i18n.t('Embedding Concurrent Requests')}
+									</Tooltip>
+								</div>
+								<div class="">
+									<input
+										bind:value={RAG_EMBEDDING_CONCURRENT_REQUESTS}
+										type="number"
+										class=" bg-transparent text-center w-14 outline-none"
+										min="0"
+										step="1"
+									/>
 								</div>
 							</div>
 						{/if}
@@ -1017,7 +1131,7 @@
 										</div>
 										<div class="flex items-center relative">
 											<select
-												class="dark:bg-gray-900 w-fit pr-8 rounded-sm px-2 p-1 text-xs bg-transparent outline-hidden text-right"
+												class="w-fit pr-8 rounded-sm px-2 p-1 text-xs bg-transparent outline-hidden text-right"
 												bind:value={RAGConfig.RAG_RERANKING_ENGINE}
 												placeholder={$i18n.t('Select a reranking model engine')}
 												on:change={(e) => {

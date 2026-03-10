@@ -8,6 +8,7 @@
 	import General from './General.svelte';
 	import Permissions from './Permissions.svelte';
 	import Users from './Users.svelte';
+	import { DEFAULT_PERMISSIONS } from '$lib/constants/permissions';
 	import UserPlusSolid from '$lib/components/icons/UserPlusSolid.svelte';
 	import WrenchSolid from '$lib/components/icons/WrenchSolid.svelte';
 	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
@@ -36,63 +37,7 @@
 	export let description = '';
 	export let data = {};
 
-	export let permissions = {
-		workspace: {
-			models: false,
-			knowledge: false,
-			prompts: false,
-			tools: false,
-			models_import: false,
-			models_export: false,
-			prompts_import: false,
-			prompts_export: false,
-			tools_import: false,
-			tools_export: false
-		},
-		sharing: {
-			models: false,
-			public_models: false,
-			knowledge: false,
-			public_knowledge: false,
-			prompts: false,
-			public_prompts: false,
-			tools: false,
-			public_tools: false,
-			notes: false,
-			public_notes: false
-		},
-		chat: {
-			controls: true,
-			valves: true,
-			system_prompt: true,
-			params: true,
-			file_upload: true,
-			delete: true,
-			delete_message: true,
-			continue_response: true,
-			regenerate_response: true,
-			rate_response: true,
-			edit: true,
-			share: true,
-			export: true,
-			stt: true,
-			tts: true,
-			call: true,
-			multiple_models: true,
-			temporary: true,
-			temporary_enforced: false
-		},
-		features: {
-			api_keys: false,
-			notes: true,
-			channels: true,
-			folders: true,
-			direct_tool_servers: false,
-			web_search: true,
-			image_generation: true,
-			code_interpreter: true
-		}
-	};
+	export let permissions = DEFAULT_PERMISSIONS;
 
 	const submitHandler = async () => {
 		loading = true;
@@ -114,7 +59,16 @@
 		if (group) {
 			name = group.name;
 			description = group.description;
-			permissions = group?.permissions ?? {};
+			const loadedPermissions = group?.permissions ?? {};
+			// Create fresh object from defaults, then overlay loaded values
+			permissions = {
+				workspace: { ...DEFAULT_PERMISSIONS.workspace, ...loadedPermissions.workspace },
+				sharing: { ...DEFAULT_PERMISSIONS.sharing, ...loadedPermissions.sharing },
+				access_grants: { ...DEFAULT_PERMISSIONS.access_grants, ...loadedPermissions.access_grants },
+				chat: { ...DEFAULT_PERMISSIONS.chat, ...loadedPermissions.chat },
+				features: { ...DEFAULT_PERMISSIONS.features, ...loadedPermissions.features },
+				settings: { ...DEFAULT_PERMISSIONS.settings, ...loadedPermissions.settings }
+			};
 			data = group?.data ?? {};
 
 			userCount = group?.member_count ?? 0;
@@ -265,7 +219,7 @@
 							{#if ['general', 'permissions'].includes(selectedTab)}
 								<div class="flex justify-end pt-3 text-sm font-medium gap-1.5">
 									<button
-										class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full flex flex-row space-x-1 items-center {loading
+										class="px-3.5 py-1.5 text-sm font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 transition rounded-full flex items-center gap-2 whitespace-nowrap {loading
 											? ' cursor-not-allowed'
 											: ''}"
 										type="submit"
@@ -274,9 +228,9 @@
 										{$i18n.t('Save')}
 
 										{#if loading}
-											<div class="ml-2 self-center">
+											<span class="shrink-0">
 												<Spinner />
-											</div>
+											</span>
 										{/if}
 									</button>
 								</div>

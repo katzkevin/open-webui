@@ -2,6 +2,7 @@
 Test endpoint for validating Datadog and Sentry integration.
 This endpoint should only be available in dev environments.
 """
+
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -33,5 +34,5 @@ async def test_logging(user=Depends(get_admin_user)):
     # Raise an exception to test Sentry integration
     raise HTTPException(
         status_code=500,
-        detail="Test exception from test-logging endpoint - this is intentional for testing Datadog and Sentry integration"
+        detail="Test exception from test-logging endpoint - this is intentional for testing Datadog and Sentry integration",
     )

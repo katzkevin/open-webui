@@ -1,3 +1,4 @@
+import copy
 import time
 import logging
 import asyncio
@@ -13,6 +14,7 @@ from open_webui.functions import get_function_models
 
 from open_webui.models.functions import Functions
 from open_webui.models.models import Models
+from open_webui.models.access_grants import AccessGrants
 from open_webui.models.groups import Groups
 
 
@@ -28,13 +30,11 @@ from open_webui.config import (
     DEFAULT_ARENA_MODEL,
 )
 
-from open_webui.env import BYPASS_MODEL_ACCESS_CONTROL, SRC_LOG_LEVELS, GLOBAL_LOG_LEVEL
+from open_webui.env import BYPASS_MODEL_ACCESS_CONTROL, GLOBAL_LOG_LEVEL
 from open_webui.models.users import UserModel
-
 
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
-log.setLevel(SRC_LOG_LEVELS["MAIN"])
 
 
 async def fetch_ollama_models(request: Request, user: UserModel = None):
@@ -149,63 +149,64 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
     ]
 
     custom_models = Models.get_all_models()
+
+    # Single O(1) lookup: Ollama base names first, then exact IDs (exact wins).
+    base_model_lookup = {}
+    for model in models:
+        if model.get("owned_by") == "ollama":
+            base_model_lookup.setdefault(model["id"].split(":")[0], model)
+        base_model_lookup[model["id"]] = model
+
+    existing_ids = {m["id"] for m in models}
+
     for custom_model in custom_models:
         if custom_model.base_model_id is None:
-            # Applied directly to a base model
-            for model in models:
-                if custom_model.id == model["id"] or (
-                    model.get("owned_by") == "ollama"
-                    and custom_model.id
-                    == model["id"].split(":")[
-                        0
-                    ]  # Ollama may return model ids in different formats (e.g., 'llama3' vs. 'llama3:7b')
-                ):
-                    if custom_model.is_active:
-                        model["name"] = custom_model.name
-                        model["info"] = custom_model.model_dump()
+            # Override applied directly to a base model (shares the same ID)
+            model = base_model_lookup.get(custom_model.id)
 
-                        # Set action_ids and filter_ids
-                        action_ids = []
-                        filter_ids = []
+            if model:
+                if custom_model.is_active:
+                    model["name"] = custom_model.name
+                    model["info"] = custom_model.model_dump()
 
-                        if "info" in model:
-                            if "meta" in model["info"]:
-                                action_ids.extend(
-                                    model["info"]["meta"].get("actionIds", [])
-                                )
-                                filter_ids.extend(
-                                    model["info"]["meta"].get("filterIds", [])
-                                )
+                    action_ids = []
+                    filter_ids = []
 
-                            if "params" in model["info"]:
-                                # Remove params to avoid exposing sensitive info
-                                del model["info"]["params"]
+                    if "info" in model:
+                        if "meta" in model["info"]:
+                            action_ids.extend(
+                                model["info"]["meta"].get("actionIds", [])
+                            )
+                            filter_ids.extend(
+                                model["info"]["meta"].get("filterIds", [])
+                            )
 
-                        model["action_ids"] = action_ids
-                        model["filter_ids"] = filter_ids
-                    else:
-                        models.remove(model)
+                        if "params" in model["info"]:
+                            del model["info"]["params"]
 
-        elif custom_model.is_active and (
-            custom_model.id not in [model["id"] for model in models]
-        ):
-            # Custom model based on a base model
+                    model["action_ids"] = action_ids
+                    model["filter_ids"] = filter_ids
+                else:
+                    models.remove(model)
+
+        elif custom_model.is_active:
+            if custom_model.id in existing_ids:
+                continue
+
             owned_by = "openai"
             connection_type = None
-
             pipe = None
 
-            for m in models:
-                if (
-                    custom_model.base_model_id == m["id"]
-                    or custom_model.base_model_id == m["id"].split(":")[0]
-                ):
-                    owned_by = m.get("owned_by", "unknown")
-                    if "pipe" in m:
-                        pipe = m["pipe"]
-
-                    connection_type = m.get("connection_type", None)
-                    break
+            base_model = base_model_lookup.get(custom_model.base_model_id)
+            if base_model is None:
+                base_model = base_model_lookup.get(
+                    custom_model.base_model_id.split(":")[0]
+                )
+            if base_model:
+                owned_by = base_model.get("owned_by", "unknown")
+                if "pipe" in base_model:
+                    pipe = base_model["pipe"]
+                connection_type = base_model.get("connection_type", None)
 
             model = {
                 "id": f"{custom_model.id}",
@@ -287,9 +288,64 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
             }
         ]
 
-    def get_function_module_by_id(function_id):
-        function_module, _, _ = get_function_module_from_cache(request, function_id)
-        return function_module
+    # Batch-prefetch all needed function records to avoid N+1 queries
+    all_function_ids = set()
+    for model in models:
+        all_function_ids.update(model.get("action_ids", []))
+        all_function_ids.update(model.get("filter_ids", []))
+    all_function_ids.update(global_action_ids)
+    all_function_ids.update(global_filter_ids)
+
+    functions_by_id = {
+        f.id: f for f in Functions.get_functions_by_ids(list(all_function_ids))
+    }
+
+    # Pre-warm the function module cache once per unique function ID.
+    # This ensures each function's DB freshness check runs exactly once,
+    # not once per (model × function) pair.
+    for function_id in all_function_ids:
+        try:
+            get_function_module_from_cache(request, function_id)
+        except Exception as e:
+            log.info(f"Failed to load function module for {function_id}: {e}")
+
+    # Apply global model defaults to all models
+    # Per-model overrides take precedence over global defaults
+    default_metadata = (
+        getattr(request.app.state.config, "DEFAULT_MODEL_METADATA", None) or {}
+    )
+
+    if default_metadata:
+        for model in models:
+            info = model.get("info")
+
+            if info is None:
+                model["info"] = {"meta": copy.deepcopy(default_metadata)}
+                continue
+
+            meta = info.setdefault("meta", {})
+            for key, value in default_metadata.items():
+                if key == "capabilities":
+                    # Merge capabilities: defaults as base, per-model overrides win
+                    existing = meta.get("capabilities") or {}
+                    meta["capabilities"] = {**value, **existing}
+                elif meta.get(key) is None:
+                    meta[key] = copy.deepcopy(value)
+
+    # Batch-fetch all function valves in one query to avoid N+1 DB hits
+    # inside get_action_priority (previously called per action × per model).
+    all_function_valves = Functions.get_function_valves_by_ids(list(all_function_ids))
+
+    def get_action_priority(action_id):
+        try:
+            function_module = request.app.state.FUNCTIONS.get(action_id)
+            if function_module and hasattr(function_module, "Valves"):
+                valves_db = all_function_valves.get(action_id)
+                valves = function_module.Valves(**(valves_db if valves_db else {}))
+                return getattr(valves, "priority", 0)
+        except Exception:
+            pass
+        return 0
 
     for model in models:
         action_ids = [
@@ -297,6 +353,8 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
             for action_id in list(set(model.pop("action_ids", []) + global_action_ids))
             if action_id in enabled_action_ids
         ]
+        action_ids.sort(key=lambda aid: (get_action_priority(aid), aid))
+
         filter_ids = [
             filter_id
             for filter_id in list(set(model.pop("filter_ids", []) + global_filter_ids))
@@ -305,23 +363,30 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
 
         model["actions"] = []
         for action_id in action_ids:
-            action_function = Functions.get_function_by_id(action_id)
+            action_function = functions_by_id.get(action_id)
             if action_function is None:
-                raise Exception(f"Action not found: {action_id}")
+                log.info(f"Action not found: {action_id}")
+                continue
 
-            function_module = get_function_module_by_id(action_id)
+            function_module = request.app.state.FUNCTIONS.get(action_id)
+            if function_module is None:
+                log.info(f"Failed to load action module: {action_id}")
+                continue
             model["actions"].extend(
                 get_action_items_from_module(action_function, function_module)
             )
 
         model["filters"] = []
         for filter_id in filter_ids:
-            filter_function = Functions.get_function_by_id(filter_id)
+            filter_function = functions_by_id.get(filter_id)
             if filter_function is None:
-                raise Exception(f"Filter not found: {filter_id}")
+                log.info(f"Filter not found: {filter_id}")
+                continue
 
-            function_module = get_function_module_by_id(filter_id)
-
+            function_module = request.app.state.FUNCTIONS.get(filter_id)
+            if function_module is None:
+                log.info(f"Failed to load filter module: {filter_id}")
+                continue
             if getattr(function_module, "toggle", None):
                 model["filters"].extend(
                     get_filter_items_from_module(filter_function, function_module)
@@ -338,61 +403,82 @@ async def get_all_models(request, refresh: bool = False, user: UserModel = None)
     return models
 
 
-def check_model_access(user, model):
+def check_model_access(user, model, db=None):
     if model.get("arena"):
+        meta = model.get("info", {}).get("meta", {})
+        access_grants = meta.get("access_grants", [])
         if not has_access(
             user.id,
-            type="read",
-            access_control=model.get("info", {})
-            .get("meta", {})
-            .get("access_control", {}),
+            permission="read",
+            access_grants=access_grants,
+            db=db,
         ):
             raise Exception("Model not found")
     else:
-        model_info = Models.get_model_by_id(model.get("id"))
+        model_info = Models.get_model_by_id(model.get("id"), db=db)
         if not model_info:
             raise Exception("Model not found")
         elif not (
             user.id == model_info.user_id
-            or has_access(
-                user.id, type="read", access_control=model_info.access_control
+            or AccessGrants.has_access(
+                user_id=user.id,
+                resource_type="model",
+                resource_id=model_info.id,
+                permission="read",
+                db=db,
             )
         ):
             raise Exception("Model not found")
 
 
-def get_filtered_models(models, user):
+def get_filtered_models(models, user, db=None):
     # Filter out models that the user does not have access to
     if (
         user.role == "user"
         or (user.role == "admin" and not BYPASS_ADMIN_ACCESS_CONTROL)
     ) and not BYPASS_MODEL_ACCESS_CONTROL:
-        filtered_models = []
-        user_group_ids = {group.id for group in Groups.get_groups_by_member_id(user.id)}
+        model_infos = {}
         for model in models:
             if model.get("arena"):
+                continue
+            info = model.get("info")
+            if info:
+                model_infos[model["id"]] = info
+
+        user_group_ids = {
+            group.id for group in Groups.get_groups_by_member_id(user.id, db=db)
+        }
+
+        # Batch-fetch accessible resource IDs in a single query instead of N has_access calls
+        accessible_model_ids = AccessGrants.get_accessible_resource_ids(
+            user_id=user.id,
+            resource_type="model",
+            resource_ids=list(model_infos.keys()),
+            permission="read",
+            user_group_ids=user_group_ids,
+            db=db,
+        )
+
+        filtered_models = []
+        for model in models:
+            if model.get("arena"):
+                meta = model.get("info", {}).get("meta", {})
+                access_grants = meta.get("access_grants", [])
                 if has_access(
                     user.id,
-                    type="read",
-                    access_control=model.get("info", {})
-                    .get("meta", {})
-                    .get("access_control", {}),
+                    permission="read",
+                    access_grants=access_grants,
                     user_group_ids=user_group_ids,
                 ):
                     filtered_models.append(model)
                 continue
 
-            model_info = Models.get_model_by_id(model["id"])
+            model_info = model_infos.get(model["id"])
             if model_info:
                 if (
                     (user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL)
-                    or user.id == model_info.user_id
-                    or has_access(
-                        user.id,
-                        type="read",
-                        access_control=model_info.access_control,
-                        user_group_ids=user_group_ids,
-                    )
+                    or user.id == model_info.get("user_id")
+                    or model["id"] in accessible_model_ids
                 ):
                     filtered_models.append(model)
 

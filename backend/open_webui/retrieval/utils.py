@@ -12,7 +12,10 @@ import re
 
 from urllib.parse import quote
 from huggingface_hub import snapshot_download
-from langchain.retrievers import ContextualCompressionRetriever, EnsembleRetriever
+from langchain_classic.retrievers import (
+    ContextualCompressionRetriever,
+    EnsembleRetriever,
+)
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 
@@ -26,9 +29,9 @@ from open_webui.models.knowledge import Knowledges
 
 from open_webui.models.chats import Chats
 from open_webui.models.notes import Notes
+from open_webui.models.access_grants import AccessGrants
 
 from open_webui.retrieval.vector.main import GetResult
-from open_webui.utils.access_control import has_access
 from open_webui.utils.headers import include_user_info_headers
 from open_webui.utils.misc import get_message_list
 
@@ -37,9 +40,10 @@ from open_webui.retrieval.loaders.youtube import YoutubeLoader
 
 
 from open_webui.env import (
-    SRC_LOG_LEVELS,
+    AIOHTTP_CLIENT_TIMEOUT,
     OFFLINE_MODE,
     ENABLE_FORWARD_USER_INFO_HEADERS,
+    AIOHTTP_CLIENT_SESSION_SSL,
 )
 from open_webui.config import (
     RAG_EMBEDDING_QUERY_PREFIX,
@@ -48,7 +52,6 @@ from open_webui.config import (
 )
 
 log = logging.getLogger(__name__)
-log.setLevel(SRC_LOG_LEVELS["RAG"])
 
 
 from typing import Any
@@ -83,6 +86,14 @@ def get_content_from_url(request, url: str) -> str:
     docs = loader.load()
     content = " ".join([doc.page_content for doc in docs])
     return content, docs
+
+
+CHUNK_HASH_KEY = "_chunk_hash"
+
+
+def _content_hash(text: str) -> str:
+    """SHA-256 hash of text, used as a stable chunk identifier for RRF dedup."""
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 class VectorSearchRetriever(BaseRetriever):
@@ -123,9 +134,11 @@ class VectorSearchRetriever(BaseRetriever):
 
         results = []
         for idx in range(len(ids)):
+            metadata = metadatas[idx]
+            metadata[CHUNK_HASH_KEY] = _content_hash(documents[idx])
             results.append(
                 Document(
-                    metadata=metadatas[idx],
+                    metadata=metadata,
                     page_content=documents[idx],
                 )
             )
@@ -237,15 +250,21 @@ async def query_doc_with_hybrid_search(
 
         log.debug(f"query_doc_with_hybrid_search:doc {collection_name}")
 
+        original_texts = collection_result.documents[0]
+        bm25_metadatas = [
+            {**meta, CHUNK_HASH_KEY: _content_hash(original_texts[idx])}
+            for idx, meta in enumerate(collection_result.metadatas[0])
+        ]
+
         bm25_texts = (
             get_enriched_texts(collection_result)
             if enable_enriched_texts
-            else collection_result.documents[0]
+            else original_texts
         )
 
         bm25_retriever = BM25Retriever.from_texts(
             texts=bm25_texts,
-            metadatas=collection_result.metadatas[0],
+            metadatas=bm25_metadatas,
         )
         bm25_retriever.k = k
 
@@ -255,18 +274,24 @@ async def query_doc_with_hybrid_search(
             top_k=k,
         )
 
+        # Use CHUNK_HASH_KEY for dedup so enriched BM25 texts don't defeat RRF
         if hybrid_bm25_weight <= 0:
             ensemble_retriever = EnsembleRetriever(
-                retrievers=[vector_search_retriever], weights=[1.0]
+                retrievers=[vector_search_retriever],
+                weights=[1.0],
+                id_key=CHUNK_HASH_KEY,
             )
         elif hybrid_bm25_weight >= 1:
             ensemble_retriever = EnsembleRetriever(
-                retrievers=[bm25_retriever], weights=[1.0]
+                retrievers=[bm25_retriever],
+                weights=[1.0],
+                id_key=CHUNK_HASH_KEY,
             )
         else:
             ensemble_retriever = EnsembleRetriever(
                 retrievers=[bm25_retriever, vector_search_retriever],
                 weights=[hybrid_bm25_weight, 1.0 - hybrid_bm25_weight],
+                id_key=CHUNK_HASH_KEY,
             )
 
         compressor = RerankCompressor(
@@ -289,7 +314,7 @@ async def query_doc_with_hybrid_search(
         # retrieve only min(k, k_reranker) items, sort and cut by distance if k < k_reranker
         if k < k_reranker:
             sorted_items = sorted(
-                zip(distances, metadatas, documents), key=lambda x: x[0], reverse=True
+                zip(distances, documents, metadatas), key=lambda x: x[0], reverse=True
             )
             sorted_items = sorted_items[:k]
 
@@ -565,7 +590,9 @@ def generate_openai_batch_embeddings(
         if "data" in data:
             return [elem["embedding"] for elem in data["data"]]
         else:
-            raise "Something went wrong :/"
+            raise ValueError(
+                "Unexpected OpenAI embeddings response: missing 'data' key"
+            )
     except Exception as e:
         log.exception(f"Error generating openai batch embeddings: {e}")
         return None
@@ -594,9 +621,14 @@ async def agenerate_openai_batch_embeddings(
         if ENABLE_FORWARD_USER_INFO_HEADERS and user:
             headers = include_user_info_headers(headers, user)
 
-        async with aiohttp.ClientSession(trust_env=True) as session:
+        async with aiohttp.ClientSession(
+            trust_env=True, timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
+        ) as session:
             async with session.post(
-                f"{url}/embeddings", headers=headers, json=form_data
+                f"{url}/embeddings",
+                headers=headers,
+                json=form_data,
+                ssl=AIOHTTP_CLIENT_SESSION_SSL,
             ) as r:
                 r.raise_for_status()
                 data = await r.json()
@@ -683,8 +715,15 @@ async def agenerate_azure_openai_batch_embeddings(
         if ENABLE_FORWARD_USER_INFO_HEADERS and user:
             headers = include_user_info_headers(headers, user)
 
-        async with aiohttp.ClientSession(trust_env=True) as session:
-            async with session.post(full_url, headers=headers, json=form_data) as r:
+        async with aiohttp.ClientSession(
+            trust_env=True, timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
+        ) as session:
+            async with session.post(
+                full_url,
+                headers=headers,
+                json=form_data,
+                ssl=AIOHTTP_CLIENT_SESSION_SSL,
+            ) as r:
                 r.raise_for_status()
                 data = await r.json()
                 if "data" in data:
@@ -730,7 +769,9 @@ def generate_ollama_batch_embeddings(
         if "embeddings" in data:
             return data["embeddings"]
         else:
-            raise "Something went wrong :/"
+            raise ValueError(
+                "Unexpected Ollama embeddings response: missing 'embeddings' key"
+            )
     except Exception as e:
         log.exception(f"Error generating ollama batch embeddings: {e}")
         return None
@@ -759,9 +800,14 @@ async def agenerate_ollama_batch_embeddings(
         if ENABLE_FORWARD_USER_INFO_HEADERS and user:
             headers = include_user_info_headers(headers, user)
 
-        async with aiohttp.ClientSession(trust_env=True) as session:
+        async with aiohttp.ClientSession(
+            trust_env=True, timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
+        ) as session:
             async with session.post(
-                f"{url}/api/embed", headers=headers, json=form_data
+                f"{url}/api/embed",
+                headers=headers,
+                json=form_data,
+                ssl=AIOHTTP_CLIENT_SESSION_SSL,
             ) as r:
                 r.raise_for_status()
                 data = await r.json()
@@ -783,6 +829,7 @@ def get_embedding_function(
     embedding_batch_size,
     azure_api_version=None,
     enable_async=True,
+    concurrent_requests=0,
 ) -> Awaitable:
     if embedding_engine == "":
         # Sentence transformers: CPU-bound sync operation
@@ -790,7 +837,9 @@ def get_embedding_function(
             return await asyncio.to_thread(
                 (
                     lambda query, prefix=None: embedding_function.encode(
-                        query, **({"prompt": prefix} if prefix else {})
+                        query,
+                        batch_size=int(embedding_batch_size),
+                        **({"prompt": prefix} if prefix else {}),
                     ).tolist()
                 ),
                 query,
@@ -822,11 +871,25 @@ def get_embedding_function(
                     log.debug(
                         f"generate_multiple_async: Processing {len(batches)} batches in parallel"
                     )
-                    # Execute all batches in parallel
-                    tasks = [
-                        embedding_function(batch, prefix=prefix, user=user)
-                        for batch in batches
-                    ]
+                    # Use semaphore to limit concurrent embedding API requests
+                    # 0 = unlimited (no semaphore)
+                    if concurrent_requests:
+                        semaphore = asyncio.Semaphore(concurrent_requests)
+
+                        async def generate_batch_with_semaphore(batch):
+                            async with semaphore:
+                                return await embedding_function(
+                                    batch, prefix=prefix, user=user
+                                )
+
+                        tasks = [
+                            generate_batch_with_semaphore(batch) for batch in batches
+                        ]
+                    else:
+                        tasks = [
+                            embedding_function(batch, prefix=prefix, user=user)
+                            for batch in batches
+                        ]
                     batch_results = await asyncio.gather(*tasks)
                 else:
                     log.debug(
@@ -985,7 +1048,12 @@ async def get_sources_from_items(
             if note and (
                 user.role == "admin"
                 or note.user_id == user.id
-                or has_access(user.id, "read", note.access_control)
+                or AccessGrants.has_access(
+                    user_id=user.id,
+                    resource_type="note",
+                    resource_id=note.id,
+                    permission="read",
+                )
             ):
                 # User has access to the note
                 query_result = {
@@ -1077,7 +1145,12 @@ async def get_sources_from_items(
             if knowledge_base and (
                 user.role == "admin"
                 or knowledge_base.user_id == user.id
-                or has_access(user.id, "read", knowledge_base.access_control)
+                or AccessGrants.has_access(
+                    user_id=user.id,
+                    resource_type="knowledge",
+                    resource_id=knowledge_base.id,
+                    permission="read",
+                )
             ):
                 if (
                     item.get("context") == "full"
@@ -1086,7 +1159,12 @@ async def get_sources_from_items(
                     if knowledge_base and (
                         user.role == "admin"
                         or knowledge_base.user_id == user.id
-                        or has_access(user.id, "read", knowledge_base.access_control)
+                        or AccessGrants.has_access(
+                            user_id=user.id,
+                            resource_type="knowledge",
+                            resource_id=knowledge_base.id,
+                            permission="read",
+                        )
                     ):
                         files = Knowledges.get_files_by_id(knowledge_base.id)
 
@@ -1232,6 +1310,8 @@ def get_model_path(model: str, update_model: bool = False):
         return model_repo_path
     except Exception as e:
         log.exception(f"Cannot determine model snapshot path: {e}")
+        if OFFLINE_MODE:
+            raise
         return model
 
 
@@ -1281,7 +1361,7 @@ class RerankCompressor(BaseDocumentCompressor):
 
         scores = None
         if reranking:
-            scores = self.reranking_function(query, documents)
+            scores = await asyncio.to_thread(self.reranking_function, query, documents)
         else:
             from sentence_transformers import util
 

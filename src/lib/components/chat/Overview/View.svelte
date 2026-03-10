@@ -8,7 +8,7 @@
 	import { onMount, tick } from 'svelte';
 
 	import { writable } from 'svelte/store';
-	import { models, showOverview, theme, user } from '$lib/stores';
+	import { models, theme, user } from '$lib/stores';
 
 	import '@xyflow/svelte/dist/style.css';
 
@@ -75,6 +75,8 @@
 
 		Object.keys(history.messages).forEach((id) => {
 			const message = history.messages[id];
+			if (!message) return;
+
 			const level = message.parentId ? (positionMap.get(message.parentId)?.level ?? -1) + 1 : 0;
 			if (!layerWidths[level]) layerWidths[level] = 0;
 
@@ -88,6 +90,8 @@
 		// Adjust positions based on siblings count to centralize vertical spacing
 		Object.keys(history.messages).forEach((id) => {
 			const pos = positionMap.get(id);
+			if (!pos) return;
+
 			const x = direction === 'vertical' ? pos.position * siblingOffset : pos.level * levelOffset;
 			const y = direction === 'vertical' ? pos.level * levelOffset : pos.position * siblingOffset;
 
@@ -168,29 +172,6 @@
 </script>
 
 <div class="w-full h-full relative">
-	<div class=" absolute z-50 w-full flex justify-between dark:text-gray-100 px-4 py-3">
-		<div class="flex items-center gap-2.5">
-			<button
-				class="self-center p-0.5"
-				on:click={() => {
-					showOverview.set(false);
-				}}
-			>
-				<ArrowLeft className="size-3.5" />
-			</button>
-			<div class=" text-lg font-medium self-center font-primary">{$i18n.t('Chat Overview')}</div>
-		</div>
-		<button
-			class="self-center p-0.5"
-			on:click={() => {
-				onClose();
-				showOverview.set(false);
-			}}
-		>
-			<XMark className="size-3.5" />
-		</button>
-	</div>
-
 	{#if $nodes.length > 0}
 		<Flow
 			{nodes}

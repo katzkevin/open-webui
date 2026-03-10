@@ -120,12 +120,12 @@ def setup_metrics(app: FastAPI, resource: Resource) -> None:
     # Instruments
     request_counter = meter.create_counter(
         name="http.server.requests",
-        description="Total HTTP requests",
+        description="Counts the total number of inbound HTTP requests.",
         unit="1",
     )
     duration_histogram = meter.create_histogram(
         name="http.server.duration",
-        description="HTTP request duration",
+        description="Measures the duration of inbound HTTP requests.",
         unit="ms",
     )
 
@@ -141,9 +141,12 @@ def setup_metrics(app: FastAPI, resource: Resource) -> None:
     def observe_total_registered_users(
         options: metrics.CallbackOptions,
     ) -> Sequence[metrics.Observation]:
+        # IMPORTANT: Use get_num_users() for efficient COUNT(*) query.
+        # Do NOT use len(get_users()["users"]) - it loads ALL user records into memory,
+        # causing connection pool exhaustion on high-latency databases (e.g., Aurora).
         return [
             metrics.Observation(
-                value=len(Users.get_users()["users"]),
+                value=Users.get_num_users() or 0,
             )
         ]
 

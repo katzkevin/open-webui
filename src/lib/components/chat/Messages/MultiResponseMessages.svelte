@@ -60,10 +60,15 @@
 
 	let selectedModelIdx = null;
 
-	let message = JSON.parse(JSON.stringify(history.messages[messageId]));
+	let message = structuredClone(history.messages[messageId]);
 	$: if (history.messages) {
-		if (JSON.stringify(message) !== JSON.stringify(history.messages[messageId])) {
-			message = JSON.parse(JSON.stringify(history.messages[messageId]));
+		const source = history.messages[messageId];
+		if (source) {
+			if (message.content !== source.content || message.done !== source.done) {
+				message = structuredClone(source);
+			} else if (JSON.stringify(message) !== JSON.stringify(source)) {
+				message = structuredClone(source);
+			}
 		}
 	}
 
@@ -248,9 +253,12 @@
 					<div class=" flex w-full mb-4.5 border-b border-gray-200 dark:border-gray-850">
 						<div
 							class="flex gap-2 scrollbar-none overflow-x-auto w-fit text-center font-medium bg-transparent pt-1 text-sm"
+							on:wheel|preventDefault={(e) => {
+								e.currentTarget.scrollLeft += e.deltaY;
+							}}
 						>
 							{#each Object.keys(groupedMessageIds) as modelIdx}
-								{#if groupedMessageIdsIdx[modelIdx] !== undefined && groupedMessageIds[modelIdx].messageIds.length > 0}
+								{#if groupedMessageIdsIdx[modelIdx] !== undefined && (groupedMessageIds[modelIdx]?.messageIds ?? []).length > 0}
 									<!-- svelte-ignore a11y-no-static-element-interactions -->
 									<!-- svelte-ignore a11y-click-events-have-key-events -->
 
@@ -283,16 +291,12 @@
 					</div>
 
 					{#if selectedModelIdx !== null}
-						{@const _messageId =
-							groupedMessageIds[selectedModelIdx].messageIds[
-								groupedMessageIdsIdx[selectedModelIdx]
-							]}
 						{#key history.currentId}
 							{#if message}
 								<ResponseMessage
 									{chatId}
 									{history}
-									messageId={_messageId}
+									messageId={message?.id}
 									{selectedModels}
 									isLastMessage={true}
 									siblings={groupedMessageIds[selectedModelIdx].messageIds}

@@ -30,8 +30,14 @@
 		toolServers,
 		playingNotificationSound,
 		channels,
-		channelId
+		channelId,
+		terminalServers,
+		showControls,
+		showFileNavPath,
+		showFileNavDir,
+		pyodideWorker
 	} from '$lib/stores';
+	import { getFileContentById } from '$lib/apis/files';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { beforeNavigate } from '$app/navigation';
@@ -49,11 +55,12 @@
 	import { chatCompletion } from '$lib/apis/openai';
 
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL, WEBUI_HOSTNAME } from '$lib/constants';
-	import { bestMatchingLanguage } from '$lib/utils';
+	import { bestMatchingLanguage, displayFileHandler } from '$lib/utils';
 	import { setTextScale } from '$lib/utils/text-scale';
 
 	import NotificationToast from '$lib/components/NotificationToast.svelte';
 	import AppSidebar from '$lib/components/app/AppSidebar.svelte';
+	import SyncStatsModal from '$lib/components/chat/Settings/SyncStatsModal.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { getUserSettings } from '$lib/apis/users';
 	import dayjs from 'dayjs';
@@ -89,6 +96,9 @@
 	let tokenTimer = null;
 
 	let showRefresh = false;
+
+	let showSyncStatsModal = false;
+	let syncStatsEventData = null;
 
 	let heartbeatInterval = null;
 
@@ -176,7 +186,20 @@
 		});
 	};
 
-	const executePythonAsWorker = async (id, code, cb) => {
+	/**
+	 * Get or create the persistent Pyodide worker.
+	 * The worker persists across executions so the virtual FS (IDBFS) is preserved.
+	 */
+	const getOrCreateWorker = () => {
+		let worker = $pyodideWorker;
+		if (!worker) {
+			worker = new PyodideWorker();
+			pyodideWorker.set(worker);
+		}
+		return worker;
+	};
+
+	const executePythonAsWorker = async (id, code, cb, files = []) => {
 		let result = null;
 		let stdout = null;
 		let stderr = null;
@@ -198,19 +221,44 @@
 			/\bimport\s+pytz\b|\bfrom\s+pytz\b/.test(code) ? 'pytz' : null
 		].filter(Boolean);
 
-		const pyodideWorker = new PyodideWorker();
+		const worker = getOrCreateWorker();
 
-		pyodideWorker.postMessage({
+		// Fetch file content from the server and prepare for the worker
+		let filePayloads = [];
+		if (files && files.length > 0) {
+			for (const file of files) {
+				try {
+					const fileId = file?.id;
+					const fileName = file?.filename || file?.name || 'file';
+					if (fileId) {
+						const content = await getFileContentById(fileId);
+						if (content) {
+							filePayloads.push({ name: fileName, data: content });
+						}
+					}
+				} catch (e) {
+					console.error('Failed to fetch file for Pyodide:', e);
+				}
+			}
+		}
+
+		worker.postMessage({
+			type: 'execute',
 			id: id,
 			code: code,
-			packages: packages
+			packages: packages,
+			files: filePayloads.length > 0 ? filePayloads : undefined
 		});
 
-		setTimeout(() => {
+		// Timeout for this specific execution (not the worker itself)
+		let timeoutId = setTimeout(() => {
 			if (executing) {
 				executing = false;
 				stderr = 'Execution Time Limit Exceeded';
-				pyodideWorker.terminate();
+
+				// Terminate and recreate the worker on timeout
+				worker.terminate();
+				pyodideWorker.set(null);
 
 				if (cb) {
 					cb(
@@ -229,11 +277,18 @@
 			}
 		}, 60000);
 
-		pyodideWorker.onmessage = (event) => {
-			console.log('pyodideWorker.onmessage', event);
-			const { id, ...data } = event.data;
+		// Use addEventListener so multiple concurrent executions don't clobber each other
+		const onMessage = (event) => {
+			const { id: eventId, ...data } = event.data;
+			// Only handle responses for this execution ID
+			if (eventId !== id) return;
+			// Ignore FS responses (they use a type field)
+			if (data.type && data.type.startsWith('fs:')) return;
 
-			console.log(id, data);
+			console.log('pyodideWorker.onmessage', event);
+			clearTimeout(timeoutId);
+			worker.removeEventListener('message', onMessage);
+			worker.removeEventListener('error', onError);
 
 			data['stdout'] && (stdout = data['stdout']);
 			data['stderr'] && (stderr = data['stderr']);
@@ -257,8 +312,11 @@
 			executing = false;
 		};
 
-		pyodideWorker.onerror = (event) => {
+		const onError = (event) => {
 			console.log('pyodideWorker.onerror', event);
+			clearTimeout(timeoutId);
+			worker.removeEventListener('message', onMessage);
+			worker.removeEventListener('error', onError);
 
 			if (cb) {
 				cb(
@@ -276,29 +334,49 @@
 			}
 			executing = false;
 		};
+
+		worker.addEventListener('message', onMessage);
+		worker.addEventListener('error', onError);
+	};
+
+	const resolveToolServer = (serverUrl) => {
+		let toolServer = $settings?.toolServers?.find((server) => server.url === serverUrl);
+		if (!toolServer) {
+			const terminalServer = ($settings?.terminalServers ?? []).find(
+				(server) => server.url === serverUrl
+			);
+			if (terminalServer) {
+				toolServer = {
+					url: terminalServer.url,
+					auth_type: terminalServer.auth_type ?? 'bearer',
+					key: terminalServer.key ?? '',
+					path: terminalServer.path ?? '/openapi.json'
+				};
+			}
+		}
+
+		let toolServerData =
+			$toolServers?.find((server) => server.url === serverUrl) ??
+			$terminalServers?.find((server) => server.url === serverUrl);
+
+		let token = null;
+		if (toolServer) {
+			const auth_type = toolServer?.auth_type ?? 'bearer';
+			if (auth_type === 'bearer') token = toolServer?.key;
+			else if (auth_type === 'session') token = localStorage.token;
+		}
+
+		return { toolServer, toolServerData, token };
 	};
 
 	const executeTool = async (data, cb) => {
-		const toolServer = $settings?.toolServers?.find((server) => server.url === data.server?.url);
-		const toolServerData = $toolServers?.find((server) => server.url === data.server?.url);
+		const { toolServer, toolServerData, token } = resolveToolServer(data.server?.url);
 
 		console.log('executeTool', data, toolServer);
 
 		if (toolServer) {
-			console.log(toolServer);
-
-			let toolServerToken = null;
-			const auth_type = toolServer?.auth_type ?? 'bearer';
-			if (auth_type === 'bearer') {
-				toolServerToken = toolServer?.key;
-			} else if (auth_type === 'none') {
-				// No authentication
-			} else if (auth_type === 'session') {
-				toolServerToken = localStorage.token;
-			}
-
 			const res = await executeToolServer(
-				toolServerToken,
+				token,
 				toolServer.url,
 				data?.name,
 				data?.params,
@@ -306,24 +384,37 @@
 			);
 
 			console.log('executeToolServer', res);
+
+			if (data?.name === 'display_file' && data?.params?.path) {
+				if (res?.exists !== false) {
+					displayFileHandler(data.params.path, { showControls, showFileNavPath });
+				}
+			}
+
+			if (['write_file'].includes(data?.name) && data?.params?.path) {
+				showFileNavDir.set(res?.path ?? data.params.path);
+			}
+
 			if (cb) {
-				cb(JSON.parse(JSON.stringify(res)));
+				cb(structuredClone(res));
 			}
 		} else {
 			if (cb) {
-				cb(
-					JSON.parse(
-						JSON.stringify({
-							error: 'Tool Server Not Found'
-						})
-					)
-				);
+				cb({ error: 'Tool Server Not Found' });
 			}
 		}
 	};
 
 	const chatEventHandler = async (event, cb) => {
 		const chat = $page.url.pathname.includes(`/c/${event.chat_id}`);
+
+		// Skip events from temporary chats that are not the current chat.
+		// This prevents notifications from being sent to other tabs/devices
+		// for privacy, since temporary chats are not meant to be persisted or visible elsewhere.
+		const isTemporaryChat = event.chat_id?.startsWith('local:');
+		if (isTemporaryChat && event.chat_id !== $chatId) {
+			return;
+		}
 
 		let isFocused = document.visibilityState !== 'visible';
 		if (window.electronAPI) {
@@ -342,6 +433,7 @@
 		if ((event.chat_id !== $chatId && !$temporaryChatEnabled) || isFocused) {
 			if (type === 'chat:completion') {
 				const { done, content, title } = data;
+				const displayTitle = title || $i18n.t('New Chat');
 
 				if (done) {
 					if ($settings?.notificationSoundAlways ?? false) {
@@ -358,8 +450,8 @@
 						if ($settings?.notificationEnabled ?? false) {
 							// WOLVIA FORK: Removed "• Open WebUI" suffix from notification title
 							// Complies with BSD-3 Clause 5(i) (<50 users exemption)
-							// Original: new Notification(`${title} • Open WebUI`, {
-							new Notification(title, {
+							// Original: new Notification(`${displayTitle} • Open WebUI`, {
+							new Notification(displayTitle, {
 								body: content,
 								icon: `${WEBUI_BASE_URL}/static/favicon.png`
 							});
@@ -372,7 +464,7 @@
 								goto(`/c/${event.chat_id}`);
 							},
 							content: content,
-							title: title
+							title: displayTitle
 						},
 						duration: 15000,
 						unstyled: true
@@ -387,7 +479,7 @@
 		} else if (data?.session_id === $socket.id) {
 			if (type === 'execute:python') {
 				console.log('execute:python', data);
-				executePythonAsWorker(data.id, data.code, cb);
+				executePythonAsWorker(data.id, data.code, cb, data.files || []);
 			} else if (type === 'execute:tool') {
 				console.log('execute:tool', data);
 				executeTool(data, cb);
@@ -490,12 +582,19 @@
 
 		// handle channel created event
 		if (event.data?.type === 'channel:created') {
-			await channels.set(
-				(await getChannels(localStorage.token)).sort(
-					(a, b) =>
-						['', null, 'group', 'dm'].indexOf(a.type) - ['', null, 'group', 'dm'].indexOf(b.type)
-				)
-			);
+			const res = await getChannels(localStorage.token).catch(async (error) => {
+				return null;
+			});
+
+			if (res) {
+				await channels.set(
+					res.sort(
+						(a, b) =>
+							['', null, 'group', 'dm'].indexOf(a.type) - ['', null, 'group', 'dm'].indexOf(b.type)
+					)
+				);
+			}
+
 			return;
 		}
 
@@ -534,13 +633,19 @@
 						})
 					);
 				} else {
-					await channels.set(
-						(await getChannels(localStorage.token)).sort(
-							(a, b) =>
-								['', null, 'group', 'dm'].indexOf(a.type) -
-								['', null, 'group', 'dm'].indexOf(b.type)
-						)
-					);
+					const res = await getChannels(localStorage.token).catch(async (error) => {
+						return null;
+					});
+
+					if (res) {
+						await channels.set(
+							res.sort(
+								(a, b) =>
+									['', null, 'group', 'dm'].indexOf(a.type) -
+									['', null, 'group', 'dm'].indexOf(b.type)
+							)
+						);
+					}
 				}
 			}
 
@@ -592,7 +697,24 @@
 		}
 	};
 
+	const windowMessageEventHandler = async (event) => {
+		if (
+			!['https://openwebui.com', 'https://www.openwebui.com', 'http://localhost:9999'].includes(
+				event.origin
+			)
+		) {
+			return;
+		}
+
+		if (event.data === 'export:stats' || event.data?.type === 'export:stats') {
+			syncStatsEventData = event.data;
+			showSyncStatsModal = true;
+		}
+	};
+
 	onMount(async () => {
+		window.addEventListener('message', windowMessageEventHandler);
+
 		let touchstartY = 0;
 
 		function isNavOrDescendant(el) {
@@ -600,12 +722,12 @@
 			return nav && (el === nav || nav.contains(el));
 		}
 
-		document.addEventListener('touchstart', (e) => {
+		const touchstartHandler = (e) => {
 			if (!isNavOrDescendant(e.target)) return;
 			touchstartY = e.touches[0].clientY;
-		});
+		};
 
-		document.addEventListener('touchmove', (e) => {
+		const touchmoveHandler = (e) => {
 			if (!isNavOrDescendant(e.target)) return;
 			const touchY = e.touches[0].clientY;
 			const touchDiff = touchY - touchstartY;
@@ -613,15 +735,19 @@
 				showRefresh = true;
 				e.preventDefault();
 			}
-		});
+		};
 
-		document.addEventListener('touchend', (e) => {
+		const touchendHandler = (e) => {
 			if (!isNavOrDescendant(e.target)) return;
 			if (showRefresh) {
 				showRefresh = false;
 				location.reload();
 			}
-		});
+		};
+
+		document.addEventListener('touchstart', touchstartHandler);
+		document.addEventListener('touchmove', touchmoveHandler, { passive: false });
+		document.addEventListener('touchend', touchendHandler);
 
 		if (typeof window !== 'undefined') {
 			if (window.applyTheme) {
@@ -728,7 +854,7 @@
 			const browserLanguages = navigator.languages
 				? navigator.languages
 				: [navigator.language || navigator.userLanguage];
-			const lang = backendConfig.default_locale
+			const lang = backendConfig?.default_locale
 				? backendConfig.default_locale
 				: bestMatchingLanguage(languages, browserLanguages, 'en-US');
 			changeLanguage(lang);
@@ -755,7 +881,11 @@
 
 					if (sessionUser) {
 						await user.set(sessionUser);
-						await config.set(await getBackendConfig());
+						try {
+							await config.set(await getBackendConfig());
+						} catch (error) {
+							console.error('Error refreshing backend config:', error);
+						}
 					} else {
 						// Redirect Invalid Session User to /auth Page
 						localStorage.removeItem('token');
@@ -806,9 +936,27 @@
 			loaded = true;
 		}
 
+		// Auto-show SyncStatsModal when opened with ?sync=true (from community)
+		if (
+			(window.opener ?? false) &&
+			$page.url.searchParams.get('sync') === 'true' &&
+			($config?.features?.enable_community_sharing ?? false)
+		) {
+			showSyncStatsModal = true;
+		}
+
 		return () => {
 			window.removeEventListener('resize', onResize);
+			window.removeEventListener('message', windowMessageEventHandler);
+			document.removeEventListener('touchstart', touchstartHandler);
+			document.removeEventListener('touchmove', touchmoveHandler);
+			document.removeEventListener('touchend', touchendHandler);
+			document.removeEventListener('visibilitychange', handleVisibilityChange);
 		};
+	});
+
+	onDestroy(() => {
+		bc.close();
 	});
 </script>
 
@@ -845,6 +993,10 @@
 	{:else}
 		<slot />
 	{/if}
+{/if}
+
+{#if $config?.features.enable_community_sharing}
+	<SyncStatsModal bind:show={showSyncStatsModal} eventData={syncStatsEventData} />
 {/if}
 
 <Toaster

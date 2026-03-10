@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
 	import { WEBUI_NAME, config, user as _user, showSidebar } from '$lib/stores';
 	import { goto } from '$app/navigation';
@@ -38,6 +38,8 @@
 	let total = null;
 
 	let query = '';
+	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
 	let orderBy = 'name'; // default sort key
 	let direction = 'asc'; // default sort order
 
@@ -77,13 +79,16 @@
 		}
 	};
 
-	$: if (
-		channel !== null &&
-		page !== null &&
-		query !== null &&
-		orderBy !== null &&
-		direction !== null
-	) {
+	// Debounce only query changes
+	$: if (query !== undefined && channel !== null) {
+		clearTimeout(debounceTimer);
+		debounceTimer = setTimeout(() => {
+			getUserList();
+		}, 300);
+	}
+
+	// Immediate response to page/sort changes
+	$: if (channel !== null && page && orderBy && direction) {
 		getUserList();
 	}
 </script>
@@ -106,7 +111,7 @@
 				<div class="">
 					<button
 						type="button"
-						class=" px-3 py-1.5 gap-1 rounded-xl bg-black dark:text-white dark:bg-gray-850/50 text-black transition font-medium text-xs flex items-center justify-center"
+						class=" px-3 py-1.5 gap-1 rounded-xl bg-gray-100/50 dark:text-white dark:bg-gray-850/50 text-black transition font-medium text-xs flex items-center justify-center"
 						on:click={onAdd}
 					>
 						<Plus className="size-3.5 " />
