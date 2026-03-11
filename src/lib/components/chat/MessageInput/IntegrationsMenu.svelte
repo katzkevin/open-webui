@@ -5,7 +5,15 @@
 	import { flyAndScale } from '$lib/utils/transitions';
 	import * as Sentry from '@sentry/svelte';
 
-	import { config, user, tools as _tools, mobile, settings, toolServers } from '$lib/stores';
+	import {
+		config,
+		user,
+		tools as _tools,
+		mobile,
+		settings,
+		toolServers,
+		terminalServers
+	} from '$lib/stores';
 
 	import { getOAuthClientAuthorizationUrl } from '$lib/apis/configs';
 	import { getTools } from '$lib/apis/tools';

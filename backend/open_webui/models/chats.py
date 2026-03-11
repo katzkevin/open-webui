@@ -456,11 +456,11 @@ class ChatTable:
             return ChatModel.model_validate(chat)
 
     def get_chat_title_by_id(self, id: str) -> Optional[str]:
-        chat = self.get_chat_by_id(id)
-        if chat is None:
-            return None
-
-        return chat.chat.get("title", "New Chat")
+        with get_db_context() as db:
+            result = db.query(Chat.title).filter_by(id=id).first()
+            if result is None:
+                return None
+            return result[0] or "New Chat"
 
     def get_messages_map_by_chat_id(self, id: str) -> Optional[dict]:
         chat = self.get_chat_by_id(id)
@@ -489,6 +489,7 @@ class ChatTable:
         if isinstance(message.get("content"), str):
             message["content"] = sanitize_text_for_db(message["content"])
 
+        user_id = chat.user_id
         chat = chat.chat
         history = chat.get("history", {})
 
@@ -509,7 +510,7 @@ class ChatTable:
             ChatMessages.upsert_message(
                 message_id=message_id,
                 chat_id=id,
-                user_id=self.get_chat_by_id(id).user_id,
+                user_id=user_id,
                 data=history["messages"][message_id],
             )
         except Exception as e:
@@ -630,7 +631,9 @@ class ChatTable:
             with get_db_context(db) as db:
                 # Use subquery to delete chat_messages for shared chats
                 shared_chat_id_subquery = (
-                    db.query(Chat.id).filter_by(user_id=f"shared-{chat_id}").subquery()
+                    db.query(Chat.id)
+                    .filter_by(user_id=f"shared-{chat_id}")
+                    .scalar_subquery()
                 )
                 db.query(ChatMessage).filter(
                     ChatMessage.chat_id.in_(shared_chat_id_subquery)
@@ -713,7 +716,7 @@ class ChatTable:
         skip: int = 0,
         limit: int = 50,
         db: Optional[Session] = None,
-    ) -> list[ChatModel]:
+    ) -> list[ChatTitleIdResponse]:
 
         with get_db_context(db) as db:
             query = db.query(Chat).filter_by(user_id=user_id, archived=True)
@@ -731,13 +734,17 @@ class ChatTable:
                         raise ValueError("Invalid order_by field")
 
                     if direction.lower() == "asc":
-                        query = query.order_by(getattr(Chat, order_by).asc())
+                        query = query.order_by(getattr(Chat, order_by).asc(), Chat.id)
                     elif direction.lower() == "desc":
-                        query = query.order_by(getattr(Chat, order_by).desc())
+                        query = query.order_by(getattr(Chat, order_by).desc(), Chat.id)
                     else:
                         raise ValueError("Invalid direction for ordering")
             else:
-                query = query.order_by(Chat.updated_at.desc())
+                query = query.order_by(Chat.updated_at.desc(), Chat.id)
+
+            query = query.with_entities(
+                Chat.id, Chat.title, Chat.updated_at, Chat.created_at
+            )
 
             if skip:
                 query = query.offset(skip)
@@ -745,7 +752,17 @@ class ChatTable:
                 query = query.limit(limit)
 
             all_chats = query.all()
-            return [ChatModel.model_validate(chat) for chat in all_chats]
+            return [
+                ChatTitleIdResponse.model_validate(
+                    {
+                        "id": chat[0],
+                        "title": chat[1],
+                        "updated_at": chat[2],
+                        "created_at": chat[3],
+                    }
+                )
+                for chat in all_chats
+            ]
 
     def get_shared_chat_list_by_user_id(
         self,
@@ -754,7 +771,7 @@ class ChatTable:
         skip: int = 0,
         limit: int = 50,
         db: Optional[Session] = None,
-    ) -> list[ChatModel]:
+    ) -> list[SharedChatResponse]:
 
         with get_db_context(db) as db:
             query = (
@@ -776,13 +793,23 @@ class ChatTable:
                         raise ValueError("Invalid order_by field")
 
                     if direction.lower() == "asc":
-                        query = query.order_by(getattr(Chat, order_by).asc())
+                        query = query.order_by(getattr(Chat, order_by).asc(), Chat.id)
                     elif direction.lower() == "desc":
-                        query = query.order_by(getattr(Chat, order_by).desc())
+                        query = query.order_by(getattr(Chat, order_by).desc(), Chat.id)
                     else:
                         raise ValueError("Invalid direction for ordering")
             else:
-                query = query.order_by(Chat.updated_at.desc())
+                query = query.order_by(Chat.updated_at.desc(), Chat.id)
+
+            # Select only the columns needed for SharedChatResponse
+            # to avoid loading the heavy chat JSON blob
+            query = query.with_entities(
+                Chat.id,
+                Chat.title,
+                Chat.share_id,
+                Chat.updated_at,
+                Chat.created_at,
+            )
 
             if skip:
                 query = query.offset(skip)
@@ -790,7 +817,18 @@ class ChatTable:
                 query = query.limit(limit)
 
             all_chats = query.all()
-            return [ChatModel.model_validate(chat) for chat in all_chats]
+            return [
+                SharedChatResponse.model_validate(
+                    {
+                        "id": chat[0],
+                        "title": chat[1],
+                        "share_id": chat[2],
+                        "updated_at": chat[3],
+                        "created_at": chat[4],
+                    }
+                )
+                for chat in all_chats
+            ]
 
     def get_chat_list_by_user_id(
         self,
@@ -816,13 +854,13 @@ class ChatTable:
 
                 if order_by and direction and getattr(Chat, order_by):
                     if direction.lower() == "asc":
-                        query = query.order_by(getattr(Chat, order_by).asc())
+                        query = query.order_by(getattr(Chat, order_by).asc(), Chat.id)
                     elif direction.lower() == "desc":
-                        query = query.order_by(getattr(Chat, order_by).desc())
+                        query = query.order_by(getattr(Chat, order_by).desc(), Chat.id)
                     else:
                         raise ValueError("Invalid direction for ordering")
             else:
-                query = query.order_by(Chat.updated_at.desc())
+                query = query.order_by(Chat.updated_at.desc(), Chat.id)
 
             if skip:
                 query = query.offset(skip)
@@ -854,7 +892,7 @@ class ChatTable:
             if not include_archived:
                 query = query.filter_by(archived=False)
 
-            query = query.order_by(Chat.updated_at.desc()).with_entities(
+            query = query.order_by(Chat.updated_at.desc(), Chat.id).with_entities(
                 Chat.id, Chat.title, Chat.updated_at, Chat.created_at
             )
 
@@ -938,6 +976,37 @@ class ChatTable:
         except Exception:
             return None
 
+    def is_chat_owner(
+        self, id: str, user_id: str, db: Optional[Session] = None
+    ) -> bool:
+        """
+        Lightweight ownership check — uses EXISTS subquery instead of loading
+        the full Chat row (which includes the potentially large JSON blob).
+        """
+        try:
+            with get_db_context(db) as db:
+                return db.query(
+                    exists().where(and_(Chat.id == id, Chat.user_id == user_id))
+                ).scalar()
+        except Exception:
+            return False
+
+    def get_chat_folder_id(
+        self, id: str, user_id: str, db: Optional[Session] = None
+    ) -> Optional[str]:
+        """
+        Fetch only the folder_id column for a chat, without loading the full
+        JSON blob. Returns None if chat doesn't exist or doesn't belong to user.
+        """
+        try:
+            with get_db_context(db) as db:
+                result = (
+                    db.query(Chat.folder_id).filter_by(id=id, user_id=user_id).first()
+                )
+                return result[0] if result else None
+        except Exception:
+            return None
+
     def get_chats(
         self, skip: int = 0, limit: int = 50, db: Optional[Session] = None
     ) -> list[ChatModel]:
@@ -970,14 +1039,18 @@ class ChatTable:
                 if order_by and direction:
                     if hasattr(Chat, order_by):
                         if direction.lower() == "asc":
-                            query = query.order_by(getattr(Chat, order_by).asc())
+                            query = query.order_by(
+                                getattr(Chat, order_by).asc(), Chat.id
+                            )
                         elif direction.lower() == "desc":
-                            query = query.order_by(getattr(Chat, order_by).desc())
+                            query = query.order_by(
+                                getattr(Chat, order_by).desc(), Chat.id
+                            )
                 else:
-                    query = query.order_by(Chat.updated_at.desc())
+                    query = query.order_by(Chat.updated_at.desc(), Chat.id)
 
             else:
-                query = query.order_by(Chat.updated_at.desc())
+                query = query.order_by(Chat.updated_at.desc(), Chat.id)
 
             total = query.count()
 
@@ -997,14 +1070,25 @@ class ChatTable:
 
     def get_pinned_chats_by_user_id(
         self, user_id: str, db: Optional[Session] = None
-    ) -> list[ChatModel]:
+    ) -> list[ChatTitleIdResponse]:
         with get_db_context(db) as db:
             all_chats = (
                 db.query(Chat)
                 .filter_by(user_id=user_id, pinned=True, archived=False)
                 .order_by(Chat.updated_at.desc())
+                .with_entities(Chat.id, Chat.title, Chat.updated_at, Chat.created_at)
             )
-            return [ChatModel.model_validate(chat) for chat in all_chats]
+            return [
+                ChatTitleIdResponse.model_validate(
+                    {
+                        "id": chat[0],
+                        "title": chat[1],
+                        "updated_at": chat[2],
+                        "created_at": chat[3],
+                    }
+                )
+                for chat in all_chats
+            ]
 
     def get_archived_chats_by_user_id(
         self, user_id: str, db: Optional[Session] = None
@@ -1108,7 +1192,7 @@ class ChatTable:
             if folder_ids:
                 query = query.filter(Chat.folder_id.in_(folder_ids))
 
-            query = query.order_by(Chat.updated_at.desc())
+            query = query.order_by(Chat.updated_at.desc(), Chat.id)
 
             # Check if the database dialect is either 'sqlite' or 'postgresql'
             dialect_name = db.bind.dialect.name
@@ -1229,7 +1313,7 @@ class ChatTable:
             query = query.filter(or_(Chat.pinned == False, Chat.pinned == None))
             query = query.filter_by(archived=False)
 
-            query = query.order_by(Chat.updated_at.desc())
+            query = query.order_by(Chat.updated_at.desc(), Chat.id)
 
             if skip:
                 query = query.offset(skip)

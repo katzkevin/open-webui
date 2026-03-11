@@ -19,7 +19,7 @@ from open_webui.models.models import (
     BulkConfigureRequest,
     BulkConfigureResponse,
 )
-from open_webui.models.access_grants import AccessGrants, has_public_read_access_grant
+from open_webui.models.access_grants import AccessGrants
 
 from pydantic import BaseModel
 from open_webui.constants import ERROR_MESSAGES
@@ -35,7 +35,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
-from open_webui.utils.access_control import has_permission
+from open_webui.utils.access_control import has_permission, filter_allowed_access_grants
 from open_webui.config import BYPASS_ADMIN_ACCESS_CONTROL, STATIC_DIR
 from open_webui.internal.db import get_session
 from sqlalchemy.orm import Session
@@ -514,6 +514,7 @@ async def update_model_by_id(
 
 class ModelAccessGrantsForm(BaseModel):
     id: str
+    name: Optional[str] = None
     access_grants: list[dict]
 
 
@@ -537,7 +538,7 @@ async def update_model_access_by_id(
         model = Models.insert_new_model(
             ModelForm(
                 id=form_data.id,
-                name=form_data.id,
+                name=form_data.name or form_data.id,
                 meta=ModelMeta(),
                 params=ModelParams(),
             ),
@@ -566,24 +567,13 @@ async def update_model_access_by_id(
             detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
         )
 
-    # Strip public sharing if user lacks permission
-    if (
-        user.role != "admin"
-        and has_public_read_access_grant(form_data.access_grants)
-        and not has_permission(
-            user.id,
-            "sharing.public_models",
-            request.app.state.config.USER_PERMISSIONS,
-        )
-    ):
-        form_data.access_grants = [
-            grant
-            for grant in form_data.access_grants
-            if not (
-                grant.get("principal_type") == "user"
-                and grant.get("principal_id") == "*"
-            )
-        ]
+    form_data.access_grants = filter_allowed_access_grants(
+        request.app.state.config.USER_PERMISSIONS,
+        user.id,
+        user.role,
+        form_data.access_grants,
+        "sharing.public_models",
+    )
 
     AccessGrants.set_access_grants(
         "model", form_data.id, form_data.access_grants, db=db

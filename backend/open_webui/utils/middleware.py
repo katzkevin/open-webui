@@ -1,3 +1,4 @@
+import copy
 import time
 import logging
 import sys
@@ -87,10 +88,12 @@ from open_webui.utils.misc import (
     get_message_list,
     add_or_update_system_message,
     add_or_update_user_message,
+    set_last_user_message_content,
     get_last_user_message,
     get_last_user_message_item,
     get_last_assistant_message,
     get_system_message,
+    replace_system_message_content,
     prepend_to_first_user_message_content,
     convert_logit_bias_input_to_json,
     get_content_from_message,
@@ -99,8 +102,9 @@ from open_webui.utils.misc import (
 from open_webui.utils.tools import (
     get_tools,
     get_updated_tool_function,
-    has_tool_server_access,
+    get_terminal_tools,
 )
+from open_webui.utils.access_control import has_connection_access
 from open_webui.utils.plugin import load_function_module_by_id
 from open_webui.utils.filter import (
     get_sorted_filter_ids,
@@ -123,6 +127,7 @@ from open_webui.config import (
     DEFAULT_VOICE_MODE_PROMPT_TEMPLATE,
     DEFAULT_TOOLS_FUNCTION_CALLING_PROMPT_TEMPLATE,
     DEFAULT_CODE_INTERPRETER_PROMPT,
+    CODE_INTERPRETER_PYODIDE_PROMPT,
     CODE_INTERPRETER_BLOCKED_MODULES,
 )
 from open_webui.env import (
@@ -164,6 +169,55 @@ def output_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:24]}"
 
 
+def _split_tool_calls(
+    tool_calls: list[dict],
+) -> list[dict]:
+    """Expand tool calls whose arguments contain multiple back-to-back JSON objects.
+
+    Some models (e.g. GPT-5.4) send multiple complete JSON argument objects
+    under the same tool call index, producing concatenated invalid JSON like:
+        '{"query":"A","count":5}{"query":"B","count":5}'
+
+    Each such tool call is split into separate entries so each gets executed
+    independently. Single-object arguments pass through unchanged.
+    """
+
+    def split_json_objects(raw: str) -> list[str]:
+        decoder = json.JSONDecoder()
+        results = []
+        position = 0
+
+        while position < len(raw):
+            while position < len(raw) and raw[position].isspace():
+                position += 1
+            if position >= len(raw):
+                break
+            try:
+                _, end = decoder.raw_decode(raw, position)
+                results.append(raw[position:end].strip())
+                position = end
+            except json.JSONDecodeError:
+                return [raw]
+
+        return results or [raw]
+
+    expanded = []
+    for tool_call in tool_calls:
+        arguments = tool_call.get("function", {}).get("arguments", "")
+        split_arguments = split_json_objects(arguments)
+
+        if len(split_arguments) <= 1:
+            expanded.append(tool_call)
+        else:
+            for argument in split_arguments:
+                cloned = copy.deepcopy(tool_call)
+                cloned["id"] = f"call_{uuid4().hex[:24]}"
+                cloned["function"]["arguments"] = argument
+                expanded.append(cloned)
+
+    return expanded
+
+
 def get_citation_source_from_tool_result(
     tool_name: str, tool_params: dict, tool_result: str, tool_id: str = ""
 ) -> list[dict]:
@@ -192,7 +246,10 @@ def get_citation_source_from_tool_result(
         return []
 
     try:
-        tool_result = json.loads(tool_result)
+        try:
+            tool_result = json.loads(tool_result)
+        except (json.JSONDecodeError, TypeError):
+            pass  # keep tool_result as-is (e.g. fetch_url returns plain text)
         if isinstance(tool_result, dict) and "error" in tool_result:
             return []
 
@@ -293,6 +350,25 @@ def get_citation_source_from_tool_result(
                                 if knowledge_name
                                 else {}
                             ),
+                        }
+                    ],
+                }
+            ]
+
+        elif tool_name == "fetch_url":
+            url = tool_params.get("url", "")
+            content = tool_result if isinstance(tool_result, str) else str(tool_result)
+            snippet = content[:500] + ("..." if len(content) > 500 else "")
+
+            return [
+                {
+                    "source": {"name": url or "fetch_url", "id": url or "fetch_url"},
+                    "document": [snippet],
+                    "metadata": [
+                        {
+                            "source": url,
+                            "name": url,
+                            "url": url,
                         }
                     ],
                 }
@@ -403,9 +479,14 @@ def serialize_output(output: list) -> str:
             result_item = tool_outputs.get(call_id)
             if result_item:
                 result_text = ""
-                for out in result_item.get("output", []):
-                    if "text" in out:
-                        result_text += out.get("text", "")
+                for result_output in result_item.get("output", []):
+                    if "text" in result_output:
+                        output_text = result_output.get("text", "")
+                        result_text += (
+                            str(output_text)
+                            if not isinstance(output_text, str)
+                            else output_text
+                        )
                 files = result_item.get("files")
                 embeds = result_item.get("embeds", "")
 
@@ -852,51 +933,65 @@ def handle_responses_streaming_event(
         return current_output, None
 
 
+def get_source_context(
+    sources: list, source_ids: dict = None, include_content: bool = True
+) -> str:
+    """
+    Build <source> tag context string from citation sources.
+    """
+    context_string = ""
+    if source_ids is None:
+        source_ids = {}
+    for source in sources:
+        for doc, meta in zip(source.get("document", []), source.get("metadata", [])):
+            source_id = (
+                meta.get("source") or source.get("source", {}).get("id") or "N/A"
+            )
+            if source_id not in source_ids:
+                source_ids[source_id] = len(source_ids) + 1
+            src_name = source.get("source", {}).get("name")
+            body = doc if include_content else ""
+            context_string += (
+                f'<source id="{source_ids[source_id]}"'
+                + (f' name="{src_name}"' if src_name else "")
+                + f">{body}</source>\n"
+            )
+    return context_string
+
+
 def apply_source_context_to_messages(
     request: Request,
     messages: list,
     sources: list,
     user_message: str,
+    include_content: bool = True,
 ) -> list:
     """
     Build source context from citation sources and apply to messages.
     Uses RAG template to format context for model consumption.
+
+    When include_content is False, emit <source> tags with id/name but no
+    document body — useful when the content is already present elsewhere
+    (e.g. in a tool result message) and only citation markers are needed.
     """
     if not sources or not user_message:
         return messages
 
-    context_string = ""
-    citation_idx = {}
+    context = get_source_context(sources, include_content=include_content)
 
-    for source in sources:
-        for doc, meta in zip(source.get("document", []), source.get("metadata", [])):
-            src_id = meta.get("source") or source.get("source", {}).get("id") or "N/A"
-            if src_id not in citation_idx:
-                citation_idx[src_id] = len(citation_idx) + 1
-            src_name = source.get("source", {}).get("name")
-            context_string += (
-                f'<source id="{citation_idx[src_id]}"'
-                + (f' name="{src_name}"' if src_name else "")
-                + f">{doc}</source>\n"
-            )
-
-    context_string = context_string.strip()
-    if not context_string:
+    context = context.strip()
+    if not context:
         return messages
 
     if RAG_SYSTEM_CONTEXT:
         return add_or_update_system_message(
-            rag_template(
-                request.app.state.config.RAG_TEMPLATE, context_string, user_message
-            ),
+            rag_template(request.app.state.config.RAG_TEMPLATE, context, user_message),
             messages,
             append=True,
         )
     else:
         return add_or_update_user_message(
-            rag_template(
-                request.app.state.config.RAG_TEMPLATE, context_string, user_message
-            ),
+            rag_template(request.app.state.config.RAG_TEMPLATE, context, user_message),
             messages,
             append=False,
         )
@@ -912,6 +1007,7 @@ def process_tool_result(
     user=None,
 ):
     tool_result_embeds = []
+    EXTERNAL_TOOL_TYPES = ("external", "action", "terminal")
 
     if isinstance(tool_result, HTMLResponse):
         content_disposition = tool_result.headers.get("Content-Disposition", "")
@@ -946,7 +1042,7 @@ def process_tool_result(
         else:
             tool_result = tool_result.body.decode("utf-8", "replace")
 
-    elif (tool_type in ("external", "action") and isinstance(tool_result, tuple)) or (
+    elif (tool_type in EXTERNAL_TOOL_TYPES and isinstance(tool_result, tuple)) or (
         direct_tool and isinstance(tool_result, list) and len(tool_result) == 2
     ):
         tool_result, tool_response_headers = tool_result
@@ -1042,12 +1138,75 @@ def process_tool_result(
     if isinstance(tool_result, dict) or isinstance(tool_result, list):
         tool_result = json.dumps(tool_result, indent=2, ensure_ascii=False)
 
-    # Coerce non-string primitives (int, float, bool, None) to prevent downstream
-    # "can only concatenate str (not int) to str" errors in citation parsing
-    if not isinstance(tool_result, str):
-        tool_result = json.dumps(tool_result, ensure_ascii=False)
+    # Safety: ensure tool_result is always a string (or None) to prevent
+    # downstream TypeError when concatenating (e.g. if an upstream callable
+    # returned a tuple that was not unpacked by the branches above).
+    if tool_result is not None and not isinstance(tool_result, str):
+        if isinstance(tool_result, tuple):
+            # execute_tool_server returns (data, headers); unpack the data part
+            tool_result = (
+                json.dumps(tool_result[0], indent=2, ensure_ascii=False)
+                if len(tool_result) > 0
+                else ""
+            )
+        else:
+            tool_result = str(tool_result)
 
     return tool_result, tool_result_files, tool_result_embeds
+
+
+async def terminal_event_handler(
+    tool_function_name: str,
+    tool_function_params: dict,
+    tool_result,
+    event_emitter,
+):
+    """Emit terminal:* events for Open Terminal tools.
+
+    - display_file  → emits 'terminal:display_file' to open the file preview.
+    - write_file / replace_file_content → emits 'terminal:write_file' to refresh.
+    - run_command → emits 'terminal:run_command' with cwd to refresh if relevant.
+    """
+    if not event_emitter:
+        return
+
+    if tool_function_name == "display_file":
+        path = tool_function_params.get("path", "")
+        if not path:
+            return
+        # Only emit if the file actually exists
+        parsed = tool_result
+        if isinstance(parsed, str):
+            try:
+                parsed = json.loads(parsed)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if isinstance(parsed, dict) and parsed.get("exists") is False:
+            return
+
+        await event_emitter(
+            {
+                "type": f"terminal:{tool_function_name}",
+                "data": {"path": path},
+            }
+        )
+    elif tool_function_name in ("write_file", "replace_file_content"):
+        path = tool_function_params.get("path", "")
+        if not path:
+            return
+        await event_emitter(
+            {
+                "type": f"terminal:{tool_function_name}",
+                "data": {"path": path},
+            }
+        )
+    elif tool_function_name == "run_command":
+        await event_emitter(
+            {
+                "type": "terminal:run_command",
+                "data": {},
+            }
+        )
 
 
 async def chat_completion_tools_handler(
@@ -1204,6 +1363,13 @@ async def chat_completion_tools_handler(
                 )
 
                 if event_emitter:
+                    await terminal_event_handler(
+                        tool_function_name,
+                        tool_function_params,
+                        tool_result,
+                        event_emitter,
+                    )
+
                     if tool_result_files:
                         await event_emitter(
                             {
@@ -2017,7 +2183,7 @@ def process_messages_with_output(messages: list[dict]) -> list[dict]:
     for message in messages:
         if message.get("role") == "assistant" and message.get("output"):
             # Use output items for clean OpenAI-format messages
-            output_messages = convert_output_to_messages(message["output"])
+            output_messages = convert_output_to_messages(message["output"], raw=True)
             if output_messages:
                 processed.extend(output_messages)
                 continue
@@ -2124,11 +2290,12 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
     # Folder "Project" handling
     # Check if the request has chat_id and is inside of a folder
+    # Uses lightweight column query — only fetches folder_id, not the full chat JSON blob
     chat_id = metadata.get("chat_id", None)
     if chat_id and user:
-        chat = Chats.get_chat_by_id_and_user_id(chat_id, user.id)
-        if chat and chat.folder_id:
-            folder = Folders.get_folder_by_id_and_user_id(chat.folder_id, user.id)
+        folder_id = Chats.get_chat_folder_id(chat_id, user.id)
+        if folder_id:
+            folder = Folders.get_folder_by_id_and_user_id(folder_id, user.id)
 
             if folder and folder.data:
                 if "system_prompt" in folder.data:
@@ -2136,10 +2303,15 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                         folder.data["system_prompt"], form_data, metadata, user
                     )
                 if "files" in folder.data:
-                    form_data["files"] = [
-                        *folder.data["files"],
-                        *form_data.get("files", []),
-                    ]
+                    if metadata.get("params", {}).get("function_calling") != "native":
+                        form_data["files"] = [
+                            *folder.data["files"],
+                            *form_data.get("files", []),
+                        ]
+                    else:
+                        # Native FC: skip RAG injection, builtin tools
+                        # will read folder knowledge from metadata.
+                        metadata["folder_knowledge"] = folder.data["files"]
 
     # Model "Knowledge" handling
     user_message = get_last_user_message(form_data["messages"])
@@ -2258,21 +2430,43 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     )
 
         if "code_interpreter" in features and features["code_interpreter"]:
+            engine = getattr(
+                request.app.state.config, "CODE_INTERPRETER_ENGINE", "pyodide"
+            )
+
             # Skip XML-tag prompt injection when native FC is enabled —
             # execute_code will be injected as a builtin tool instead
             if metadata.get("params", {}).get("function_calling") != "native":
-                form_data["messages"] = add_or_update_user_message(
-                    (
-                        request.app.state.config.CODE_INTERPRETER_PROMPT_TEMPLATE
-                        if request.app.state.config.CODE_INTERPRETER_PROMPT_TEMPLATE
-                        != ""
-                        else DEFAULT_CODE_INTERPRETER_PROMPT
-                    ),
-                    form_data["messages"],
+                prompt = (
+                    request.app.state.config.CODE_INTERPRETER_PROMPT_TEMPLATE
+                    if request.app.state.config.CODE_INTERPRETER_PROMPT_TEMPLATE != ""
+                    else DEFAULT_CODE_INTERPRETER_PROMPT
                 )
 
+                # Append filesystem awareness only for pyodide engine
+                if engine != "jupyter":
+                    prompt += CODE_INTERPRETER_PYODIDE_PROMPT
+
+                form_data["messages"] = add_or_update_user_message(
+                    prompt,
+                    form_data["messages"],
+                )
+            else:
+                # Native FC: tool docstring can't be dynamic, so inject
+                # filesystem context into messages for pyodide engine
+                if engine != "jupyter":
+                    form_data["messages"] = add_or_update_user_message(
+                        CODE_INTERPRETER_PYODIDE_PROMPT,
+                        form_data["messages"],
+                    )
+
     tool_ids = form_data.pop("tool_ids", None)
+    terminal_id = form_data.pop("terminal_id", None)
     files = form_data.pop("files", None)
+
+    # Caller-provided OpenAI-style tools take precedence over server-side
+    # tool resolution (tool_ids, MCP servers, builtin tools).
+    payload_tools = form_data.get("tools", None)
 
     # Skills
     user_skill_ids = set(form_data.pop("skill_ids", None) or [])
@@ -2341,180 +2535,188 @@ async def process_chat_payload(request, form_data, user, metadata, model):
     metadata = {
         **metadata,
         "tool_ids": tool_ids,
+        "terminal_id": terminal_id,
         "files": files,
     }
     form_data["metadata"] = metadata
 
-    # Server side tools
-    tool_ids = metadata.get("tool_ids", None)
-    # Client side tools
-    direct_tool_servers = metadata.get("tool_servers", None)
+    # When the caller provides an explicit OpenAI-style `tools` array in the
+    # request body, skip all server-side tool resolution and pass the caller's
+    # tools through to the model unchanged.
+    if not payload_tools:
+        # Server side tools
+        tool_ids = metadata.get("tool_ids", None)
+        # Client side tools
+        direct_tool_servers = metadata.get("tool_servers", None)
 
-    log.debug(f"{tool_ids=}")
-    log.debug(f"{direct_tool_servers=}")
+        log.debug(f"{tool_ids=}")
+        log.debug(f"{direct_tool_servers=}")
 
-    tools_dict = {}
+        tools_dict = {}
 
-    mcp_clients = {}
-    mcp_tools_dict = {}
+        mcp_clients = {}
+        mcp_tools_dict = {}
 
-    if tool_ids:
-        for tool_id in tool_ids:
-            if tool_id.startswith("server:mcp:"):
-                try:
-                    server_id = tool_id[len("server:mcp:") :]
+        if tool_ids:
+            for tool_id in tool_ids:
+                if tool_id.startswith("server:mcp:"):
+                    try:
+                        server_id = tool_id[len("server:mcp:") :]
 
-                    mcp_server_connection = None
-                    for (
-                        server_connection
-                    ) in request.app.state.config.TOOL_SERVER_CONNECTIONS:
-                        if (
-                            server_connection.get("type", "") == "mcp"
-                            and server_connection.get("info", {}).get("id") == server_id
-                        ):
-                            mcp_server_connection = server_connection
-                            break
+                        mcp_server_connection = None
+                        for (
+                            server_connection
+                        ) in request.app.state.config.TOOL_SERVER_CONNECTIONS:
+                            if (
+                                server_connection.get("type", "") == "mcp"
+                                and server_connection.get("info", {}).get("id")
+                                == server_id
+                            ):
+                                mcp_server_connection = server_connection
+                                break
 
-                    if not mcp_server_connection:
-                        log.error(f"MCP server with id {server_id} not found")
-                        continue
+                        if not mcp_server_connection:
+                            log.error(f"MCP server with id {server_id} not found")
+                            continue
 
-                    # Check access control for MCP server
-                    if not has_tool_server_access(user, mcp_server_connection):
-                        log.warning(
-                            f"Access denied to MCP server {server_id} for user {user.id}"
-                        )
-                        continue
+                        # Check access control for MCP server
+                        if not has_connection_access(user, mcp_server_connection):
+                            log.warning(
+                                f"Access denied to MCP server {server_id} for user {user.id}"
+                            )
+                            continue
 
-                    auth_type = mcp_server_connection.get("auth_type", "")
-                    headers = {}
-                    if auth_type == "bearer":
-                        headers["Authorization"] = (
-                            f"Bearer {mcp_server_connection.get('key', '')}"
-                        )
-                    elif auth_type == "none":
-                        # No authentication
-                        pass
-                    elif auth_type == "session":
-                        headers["Authorization"] = (
-                            f"Bearer {request.state.token.credentials}"
-                        )
-                    elif auth_type == "system_oauth":
-                        oauth_token = extra_params.get("__oauth_token__", None)
-                        if oauth_token:
+                        auth_type = mcp_server_connection.get("auth_type", "")
+                        headers = {}
+                        if auth_type == "bearer":
                             headers["Authorization"] = (
-                                f"Bearer {oauth_token.get('access_token', '')}"
+                                f"Bearer {mcp_server_connection.get('key', '')}"
                             )
-                    elif auth_type == "oauth_2.1":
-                        try:
-                            splits = server_id.split(":")
-                            server_id = splits[-1] if len(splits) > 1 else server_id
-
-                            oauth_token = await request.app.state.oauth_client_manager.get_oauth_token(
-                                user.id, f"mcp:{server_id}"
+                        elif auth_type == "none":
+                            # No authentication
+                            pass
+                        elif auth_type == "session":
+                            headers["Authorization"] = (
+                                f"Bearer {request.state.token.credentials}"
                             )
-
+                        elif auth_type == "system_oauth":
+                            oauth_token = extra_params.get("__oauth_token__", None)
                             if oauth_token:
                                 headers["Authorization"] = (
                                     f"Bearer {oauth_token.get('access_token', '')}"
                                 )
-                        except Exception as e:
-                            log.error(f"Error getting OAuth token: {e}")
-                            oauth_token = None
+                        elif auth_type == "oauth_2.1":
+                            try:
+                                splits = server_id.split(":")
+                                server_id = splits[-1] if len(splits) > 1 else server_id
 
-                    connection_headers = mcp_server_connection.get("headers", None)
-                    if connection_headers and isinstance(connection_headers, dict):
-                        for key, value in connection_headers.items():
-                            headers[key] = value
-
-                    # Add user info headers if enabled
-                    if ENABLE_FORWARD_USER_INFO_HEADERS and user:
-                        headers = include_user_info_headers(headers, user)
-                        if metadata and metadata.get("chat_id"):
-                            headers[FORWARD_SESSION_INFO_HEADER_CHAT_ID] = metadata.get(
-                                "chat_id"
-                            )
-                        if metadata and metadata.get("message_id"):
-                            headers[FORWARD_SESSION_INFO_HEADER_MESSAGE_ID] = (
-                                metadata.get("message_id")
-                            )
-
-                    mcp_clients[server_id] = MCPClient()
-                    await mcp_clients[server_id].connect(
-                        url=mcp_server_connection.get("url", ""),
-                        headers=headers if headers else None,
-                    )
-
-                    function_name_filter_list = mcp_server_connection.get(
-                        "config", {}
-                    ).get("function_name_filter_list", "")
-
-                    if isinstance(function_name_filter_list, str):
-                        function_name_filter_list = function_name_filter_list.split(",")
-
-                    tool_specs = await mcp_clients[server_id].list_tool_specs()
-                    for tool_spec in tool_specs:
-
-                        def make_tool_function(client, function_name):
-                            async def tool_function(**kwargs):
-                                return await client.call_tool(
-                                    function_name,
-                                    function_args=kwargs,
+                                oauth_token = await request.app.state.oauth_client_manager.get_oauth_token(
+                                    user.id, f"mcp:{server_id}"
                                 )
 
-                            return tool_function
+                                if oauth_token:
+                                    headers["Authorization"] = (
+                                        f"Bearer {oauth_token.get('access_token', '')}"
+                                    )
+                            except Exception as e:
+                                log.error(f"Error getting OAuth token: {e}")
+                                oauth_token = None
 
-                        if function_name_filter_list:
-                            if not is_string_allowed(
-                                tool_spec["name"], function_name_filter_list
-                            ):
-                                # Skip this function
-                                continue
+                        connection_headers = mcp_server_connection.get("headers", None)
+                        if connection_headers and isinstance(connection_headers, dict):
+                            for key, value in connection_headers.items():
+                                headers[key] = value
 
-                        tool_function = make_tool_function(
-                            mcp_clients[server_id], tool_spec["name"]
+                        # Add user info headers if enabled
+                        if ENABLE_FORWARD_USER_INFO_HEADERS and user:
+                            headers = include_user_info_headers(headers, user)
+                            if metadata and metadata.get("chat_id"):
+                                headers[FORWARD_SESSION_INFO_HEADER_CHAT_ID] = (
+                                    metadata.get("chat_id")
+                                )
+                            if metadata and metadata.get("message_id"):
+                                headers[FORWARD_SESSION_INFO_HEADER_MESSAGE_ID] = (
+                                    metadata.get("message_id")
+                                )
+
+                        mcp_clients[server_id] = MCPClient()
+                        await mcp_clients[server_id].connect(
+                            url=mcp_server_connection.get("url", ""),
+                            headers=headers if headers else None,
                         )
 
-                        mcp_tools_dict[f"{server_id}_{tool_spec['name']}"] = {
-                            "spec": {
-                                **tool_spec,
-                                "name": f"{server_id}_{tool_spec['name']}",
-                            },
-                            "callable": tool_function,
-                            "type": "mcp",
-                            "client": mcp_clients[server_id],
-                            "direct": False,
-                        }
-                except Exception as e:
-                    log.error(f"Failed to connect to MCP server '{server_id}': {e}")
-                    sentry_sdk.capture_exception(e)
-                    if event_emitter:
-                        await event_emitter(
-                            {
-                                "type": "chat:message:error",
-                                "data": {
-                                    "error": {
-                                        "content": f"Failed to connect to MCP server '{server_id}'"
-                                    }
+                        function_name_filter_list = mcp_server_connection.get(
+                            "config", {}
+                        ).get("function_name_filter_list", "")
+
+                        if isinstance(function_name_filter_list, str):
+                            function_name_filter_list = function_name_filter_list.split(
+                                ","
+                            )
+
+                        tool_specs = await mcp_clients[server_id].list_tool_specs()
+                        for tool_spec in tool_specs:
+
+                            def make_tool_function(client, function_name):
+                                async def tool_function(**kwargs):
+                                    return await client.call_tool(
+                                        function_name,
+                                        function_args=kwargs,
+                                    )
+
+                                return tool_function
+
+                            if function_name_filter_list:
+                                if not is_string_allowed(
+                                    tool_spec["name"], function_name_filter_list
+                                ):
+                                    # Skip this function
+                                    continue
+
+                            tool_function = make_tool_function(
+                                mcp_clients[server_id], tool_spec["name"]
+                            )
+
+                            mcp_tools_dict[f"{server_id}_{tool_spec['name']}"] = {
+                                "spec": {
+                                    **tool_spec,
+                                    "name": f"{server_id}_{tool_spec['name']}",
                                 },
+                                "callable": tool_function,
+                                "type": "mcp",
+                                "client": mcp_clients[server_id],
+                                "direct": False,
                             }
-                        )
-                    continue
+                    except Exception as e:
+                        log.error(f"Failed to connect to MCP server '{server_id}': {e}")
+                        sentry_sdk.capture_exception(e)
+                        if event_emitter:
+                            await event_emitter(
+                                {
+                                    "type": "chat:message:error",
+                                    "data": {
+                                        "error": {
+                                            "content": f"Failed to connect to MCP server '{server_id}'"
+                                        }
+                                    },
+                                }
+                            )
+                        continue
 
-        tools_dict = await get_tools(
-            request,
-            tool_ids,
-            user,
-            {
-                **extra_params,
-                "__model__": models[task_model_id],
-                "__messages__": form_data["messages"],
-                "__files__": metadata.get("files", []),
-            },
-        )
+            tools_dict = await get_tools(
+                request,
+                tool_ids,
+                user,
+                {
+                    **extra_params,
+                    "__model__": models[task_model_id],
+                    "__messages__": form_data["messages"],
+                    "__files__": metadata.get("files", []),
+                },
+            )
 
-        if mcp_tools_dict:
-            tools_dict = {**tools_dict, **mcp_tools_dict}
+            if mcp_tools_dict:
+                tools_dict = {**tools_dict, **mcp_tools_dict}
 
     if direct_tool_servers:
         for tool_server in direct_tool_servers:
@@ -2560,11 +2762,67 @@ async def process_chat_payload(request, form_data, user, metadata, model):
             if name not in tools_dict:
                 tools_dict[name] = tool_dict
 
-    if tools_dict:
-        async with trace_chat_span(
-            "chat.tools.setup",
-            {ChatSpanAttributes.HAS_TOOLS: True},
+        # Resolve terminal tools if terminal_id is set (outside tool_ids check
+        # so system terminals work even when no other tools are selected)
+        if terminal_id:
+            try:
+                terminal_tools = await get_terminal_tools(
+                    request,
+                    terminal_id,
+                    user,
+                    extra_params,
+                )
+                if terminal_tools:
+                    tools_dict = {**tools_dict, **terminal_tools}
+            except Exception as e:
+                log.exception(e)
+                sentry_sdk.capture_exception(e)
+
+        if direct_tool_servers:
+            for tool_server in direct_tool_servers:
+                tool_specs = tool_server.pop("specs", [])
+
+                for tool in tool_specs:
+                    tools_dict[tool["name"]] = {
+                        "spec": tool,
+                        "direct": True,
+                        "server": tool_server,
+                    }
+
+        if mcp_clients:
+            metadata["mcp_clients"] = mcp_clients
+
+        # Inject builtin tools for native function calling based on enabled features and model capability
+        # Check if builtin_tools capability is enabled for this model (defaults to True if not specified)
+        builtin_tools_enabled = (
+            model.get("info", {}).get("meta", {}).get("capabilities") or {}
+        ).get("builtin_tools", True)
+        if (
+            metadata.get("params", {}).get("function_calling") == "native"
+            and builtin_tools_enabled
         ):
+            # Add file context to user messages
+            chat_id = metadata.get("chat_id")
+            form_data["messages"] = add_file_context(
+                form_data.get("messages", []), chat_id, user
+            )
+            builtin_tools = get_builtin_tools(
+                request,
+                {
+                    **extra_params,
+                    "__event_emitter__": event_emitter,
+                    "__skill_ids__": [
+                        s.id for s in available_skills if s.id not in user_skill_ids
+                    ],
+                },
+                features,
+                model,
+            )
+            for name, tool_dict in builtin_tools.items():
+                if name not in tools_dict:
+                    tools_dict[name] = tool_dict
+
+        if tools_dict:
             if metadata.get("params", {}).get("function_calling") == "native":
                 # If the function calling is native, then call the tools function calling handler
                 metadata["tools"] = tools_dict
@@ -2572,7 +2830,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     {"type": "function", "function": tool.get("spec", {})}
                     for tool in tools_dict.values()
                 ]
-
             else:
                 # If the function calling is not native, then call the tools function calling handler
                 try:
@@ -2600,6 +2857,16 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 sources.extend(flags.get("sources", []))
             except Exception as e:
                 log.exception(e)
+
+    # Save the pre-RAG message state so the native tool call loop can
+    # restore to the true original (before file-source injection) rather
+    # than a snapshot that already has the RAG template baked in.
+    system_message = get_system_message(form_data["messages"])
+    metadata["system_prompt"] = (
+        get_content_from_message(system_message) if system_message else None
+    )
+    metadata["user_prompt"] = get_last_user_message(form_data["messages"])
+    metadata["sources"] = sources[:] if sources else []
 
     # If context is not empty, insert it into the messages
     if sources and prompt:
@@ -3039,6 +3306,8 @@ async def non_streaming_chat_response_handler(response, ctx):
                     )
 
                     # Save message in the database
+                    usage = normalize_usage(response_data.get("usage", {}) or {})
+
                     Chats.upsert_message_to_chat_by_id_and_message_id(
                         metadata["chat_id"],
                         metadata["message_id"],
@@ -3046,6 +3315,7 @@ async def non_streaming_chat_response_handler(response, ctx):
                             "role": "assistant",
                             "content": content,
                             "output": response_output,
+                            **({"usage": usage} if usage else {}),
                         },
                     )
 
@@ -3675,7 +3945,7 @@ async def streaming_chat_response_handler(response, ctx):
                                                     if delta_name:
                                                         current_response_tool_call[
                                                             "function"
-                                                        ]["name"] += delta_name
+                                                        ]["name"] = delta_name
 
                                                     if delta_arguments:
                                                         current_response_tool_call[
@@ -3723,14 +3993,17 @@ async def streaming_chat_response_handler(response, ctx):
                                         delta.get("images", []), request, metadata, user
                                     )
                                     if image_urls:
+                                        image_file_list = [
+                                            {"type": "image", "url": url}
+                                            for url in image_urls
+                                        ]
                                         message_files = Chats.add_message_files_by_id_and_message_id(
                                             metadata["chat_id"],
                                             metadata["message_id"],
-                                            [
-                                                {"type": "image", "url": url}
-                                                for url in image_urls
-                                            ],
+                                            image_file_list,
                                         )
+                                        if message_files is None:
+                                            message_files = image_file_list
 
                                         await event_emitter(
                                             {
@@ -4035,7 +4308,7 @@ async def streaming_chat_response_handler(response, ctx):
                                 reasoning_item["status"] = "completed"
 
                     if response_tool_calls:
-                        tool_calls.append(response_tool_calls)
+                        tool_calls.append(_split_tool_calls(response_tool_calls))
 
                     if response.background:
                         await response.background()
@@ -4044,6 +4317,25 @@ async def streaming_chat_response_handler(response, ctx):
 
                 tool_call_retries = 0
                 tool_call_sources = []  # Track citation sources from tool results
+                all_tool_call_sources = []  # Accumulated sources across all iterations
+                user_message = get_last_user_message(form_data["messages"])
+
+                # Check if citations are enabled for this model
+                citations_enabled = (
+                    model.get("info", {}).get("meta", {}).get("capabilities") or {}
+                ).get("citations", True)
+
+                # Use the pre-RAG system content captured before the
+                # initial file-source injection in process_chat_payload.
+                # This ensures restore truly undoes the RAG template.
+                original_system_content = metadata.get("system_prompt")
+                if original_system_content is None:
+                    original_system_message = get_system_message(form_data["messages"])
+                    original_system_content = (
+                        get_content_from_message(original_system_message)
+                        if original_system_message
+                        else None
+                    )
 
                 while (
                     len(tool_calls) > 0
@@ -4094,18 +4386,26 @@ async def streaming_chat_response_handler(response, ctx):
                         # The parent span context is propagated automatically
 
                         tool_function_params = {}
-                        try:
-                            # json.loads cannot be used because some models do not produce valid JSON
-                            tool_function_params = ast.literal_eval(tool_args)
-                        except Exception as e:
-                            log.debug(e)
-                            # Fallback to JSON parsing
+                        if tool_args and tool_args.strip():
                             try:
-                                tool_function_params = json.loads(tool_args)
+                                # json.loads cannot be used because some models do not produce valid JSON
+                                tool_function_params = ast.literal_eval(tool_args)
                             except Exception as e:
-                                log.error(
-                                    f"Error parsing tool call arguments: {tool_args}"
-                                )
+                                log.debug(e)
+                                # Fallback to JSON parsing
+                                try:
+                                    tool_function_params = json.loads(tool_args)
+                                except Exception as e:
+                                    log.error(
+                                        f"Error parsing tool call arguments: {tool_args}"
+                                    )
+                                    results.append(
+                                        {
+                                            "tool_call_id": tool_call_id,
+                                            "content": f"Error: Tool call arguments could not be parsed. The model generated malformed or incomplete JSON for `{tool_function_name}`. Please try again.",
+                                        }
+                                    )
+                                    continue
 
                         # Ensure arguments are valid JSON for downstream LLM integrations
                         log.debug(
@@ -4186,6 +4486,13 @@ async def streaming_chat_response_handler(response, ctx):
                             )
                         )
 
+                        await terminal_event_handler(
+                            tool_function_name,
+                            tool_function_params,
+                            tool_result,
+                            event_emitter,
+                        )
+
                         # Extract citation sources from tool results
                         if tool_result:
                             try:
@@ -4211,7 +4518,7 @@ async def streaming_chat_response_handler(response, ctx):
                         results.append(
                             {
                                 "tool_call_id": tool_call_id,
-                                "content": tool_result or "",
+                                "content": str(tool_result) if tool_result else "",
                                 **(
                                     {"files": tool_result_files}
                                     if tool_result_files
@@ -4278,20 +4585,61 @@ async def streaming_chat_response_handler(response, ctx):
                         }
                     )
 
-                    # Emit citation sources for UI display
-                    for source in tool_call_sources:
-                        await event_emitter({"type": "source", "data": source})
+                    # Emit citation sources to the frontend for display
+                    if citations_enabled:
+                        for source in tool_call_sources:
+                            await event_emitter({"type": "source", "data": source})
 
-                    # Apply source context to messages for model
-                    if tool_call_sources:
-                        user_msg = get_last_user_message(form_data["messages"])
-                        if user_msg:
-                            form_data["messages"] = apply_source_context_to_messages(
-                                request,
-                                form_data["messages"],
-                                tool_call_sources,
-                                user_msg,
+                        # Apply tool source context to messages for the model.
+                        # Restoring to pre-RAG original prevents duplicating
+                        # the RAG template across file and tool sources.
+                        all_tool_call_sources.extend(tool_call_sources)
+                        if all_tool_call_sources and user_message:
+                            # Restore pre-RAG message state before re-applying
+                            # to prevent RAG template duplication.
+                            original_user_message = (
+                                metadata.get("user_prompt") or user_message
                             )
+                            set_last_user_message_content(
+                                original_user_message,
+                                form_data["messages"],
+                            )
+                            replace_system_message_content(
+                                original_system_content or "",
+                                form_data["messages"],
+                            )
+
+                            # Build context: file sources with content,
+                            # tool sources as citation markers only.
+                            source_ids = {}
+                            source_context = get_source_context(
+                                metadata.get("sources", []), source_ids
+                            ) + get_source_context(
+                                all_tool_call_sources,
+                                source_ids,
+                                include_content=False,
+                            )
+                            source_context = source_context.strip()
+                            if source_context:
+                                rag_content = rag_template(
+                                    request.app.state.config.RAG_TEMPLATE,
+                                    source_context,
+                                    user_message,
+                                )
+                                if RAG_SYSTEM_CONTEXT:
+                                    form_data["messages"] = (
+                                        add_or_update_system_message(
+                                            rag_content,
+                                            form_data["messages"],
+                                            append=True,
+                                        )
+                                    )
+                                else:
+                                    form_data["messages"] = add_or_update_user_message(
+                                        rag_content,
+                                        form_data["messages"],
+                                        append=False,
+                                    )
                         tool_call_sources.clear()
 
                     await event_emitter(
@@ -4394,6 +4742,7 @@ async def streaming_chat_response_handler(response, ctx):
                                                 "session_id": metadata.get(
                                                     "session_id", None
                                                 ),
+                                                "files": metadata.get("files", []),
                                             },
                                         }
                                     )

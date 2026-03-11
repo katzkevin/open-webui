@@ -46,6 +46,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response, JSONResponse
 from open_webui.config import (
     OPENID_PROVIDER_URL,
+    OPENID_END_SESSION_ENDPOINT,
     ENABLE_OAUTH_SIGNUP,
     ENABLE_LDAP,
     ENABLE_PASSWORD_AUTH,
@@ -700,8 +701,9 @@ async def signup_handler(
     Returns the newly created UserModel.
     Raises HTTPException on failure.
     """
-    has_users = Users.has_users(db=db)
-    role = "admin" if not has_users else request.app.state.config.DEFAULT_USER_ROLE
+    # Insert with default role first to avoid TOCTOU race on first signup.
+    # If has_users() is checked before insert, concurrent requests during
+    # first-user registration can all see an empty table and each get admin.
     hashed = get_password_hash(password)
 
     user = Auths.insert_new_auth(
@@ -709,11 +711,18 @@ async def signup_handler(
         password=hashed,
         name=name,
         profile_image_url=profile_image_url,
-        role=role,
+        role=request.app.state.config.DEFAULT_USER_ROLE,
         db=db,
     )
     if not user:
         raise HTTPException(500, detail=ERROR_MESSAGES.CREATE_USER_ERROR)
+
+    # Atomically check if this is the only user *after* the insert.
+    # Only the single user present at this point should become admin.
+    if Users.get_num_users(db=db) == 1:
+        Users.update_user_role_by_id(user.id, "admin", db=db)
+        user = Users.get_user_by_id(user.id, db=db)
+        request.app.state.config.ENABLE_SIGNUP = False
 
     if request.app.state.config.WEBHOOK_URL:
         await post_webhook(
@@ -726,10 +735,6 @@ async def signup_handler(
                 "user": user.model_dump_json(exclude_none=True),
             },
         )
-
-    if not has_users:
-        # Disable signup after the first user is created
-        request.app.state.config.ENABLE_SIGNUP = False
 
     apply_default_group_assignment(
         request.app.state.config.DEFAULT_GROUP_ID,
@@ -820,6 +825,19 @@ async def signout(
         response.delete_cookie("oauth_session_id")
 
         session = OAuthSessions.get_session_by_id(oauth_session_id, db=db)
+
+        # If a custom end_session_endpoint is configured (e.g. AWS Cognito), redirect
+        # there directly instead of attempting OIDC discovery.
+        if OPENID_END_SESSION_ENDPOINT.value:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": True,
+                    "redirect_url": OPENID_END_SESSION_ENDPOINT.value,
+                },
+                headers=response.headers,
+            )
+
         oauth_server_metadata_url = (
             request.app.state.oauth_manager.get_server_metadata_url(session.provider)
             if session
@@ -1153,8 +1171,6 @@ async def update_ldap_server(
         "host",
         "attribute_for_mail",
         "attribute_for_username",
-        "app_dn",
-        "app_dn_password",
         "search_base",
     ]
     for key in required_fields:
@@ -1169,8 +1185,8 @@ async def update_ldap_server(
     request.app.state.config.LDAP_ATTRIBUTE_FOR_USERNAME = (
         form_data.attribute_for_username
     )
-    request.app.state.config.LDAP_APP_DN = form_data.app_dn
-    request.app.state.config.LDAP_APP_PASSWORD = form_data.app_dn_password
+    request.app.state.config.LDAP_APP_DN = form_data.app_dn or ""
+    request.app.state.config.LDAP_APP_PASSWORD = form_data.app_dn_password or ""
     request.app.state.config.LDAP_SEARCH_BASE = form_data.search_base
     request.app.state.config.LDAP_SEARCH_FILTERS = form_data.search_filters
     request.app.state.config.LDAP_USE_TLS = form_data.use_tls
