@@ -1,0 +1,71 @@
+# Open WebUI Backend Development Commands
+
+# Default recipe - show available commands
+default:
+    @just --list
+
+# Install dependencies using uv
+install:
+    uv venv .venv
+    uv pip install -r requirements.txt
+
+# Run all tests (requires Docker)
+# NOTE: Test infrastructure has pre-existing auth mocking issues.
+# See: mock_webui_user context manager may need updates to work with current app architecture.
+test *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Ensure venv exists
+    if [ ! -d ".venv" ]; then
+        echo "Creating virtual environment..."
+        uv venv .venv
+    fi
+
+    # Install dependencies
+    echo "Installing dependencies..."
+    uv pip install -r requirements.txt --quiet
+
+    # Check Docker is running
+    if ! docker info > /dev/null 2>&1; then
+        echo "Error: Docker is not running. Tests require Docker for postgres."
+        exit 1
+    fi
+
+    # Run tests with correct PYTHONPATH
+    echo "Running tests..."
+    PYTHONPATH=./open_webui:. .venv/bin/python -m pytest open_webui/test {{ ARGS }}
+
+# Run specific test file
+test-file FILE *ARGS:
+    PYTHONPATH=./open_webui:. .venv/bin/python -m pytest {{ FILE }} {{ ARGS }}
+
+# Run bulk-configure tests specifically
+test-bulk-configure *ARGS:
+    just test open_webui/test/apps/webui/routers/test_models.py -v -k "bulk_configure" {{ ARGS }}
+
+# Run tests with verbose output
+test-verbose *ARGS:
+    just test -v --tb=short {{ ARGS }}
+
+# Type check with mypy (if configured)
+typecheck:
+    .venv/bin/python -m mypy open_webui
+
+# Format code with black
+format:
+    .venv/bin/python -m black open_webui
+
+# Lint with ruff
+lint:
+    .venv/bin/python -m ruff check open_webui
+
+# Clean up test artifacts and cache
+clean:
+    rm -rf .pytest_cache __pycache__ .mypy_cache
+    find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    find . -type f -name "*.pyc" -delete 2>/dev/null || true
+
+# Dev server (for local development)
+dev:
+    .venv/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8080
