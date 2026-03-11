@@ -10,7 +10,7 @@ on:
 env:
   AWS_REGION: us-east-2
   # IMPORTANT: Update this when merging new upstream Open WebUI versions
-  UPSTREAM_VERSION: "0.8.3"
+  UPSTREAM_VERSION: "0.8.10"
 
 jobs:
   build-and-push:
