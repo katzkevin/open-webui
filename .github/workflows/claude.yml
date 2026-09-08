@@ -37,7 +37,10 @@ jobs:
         id: claude
         # No github_token input: the action authenticates as the Claude GitHub
         # App so that CI runs on the commits it pushes.
-        uses: anthropics/claude-code-action@v1
+        # Pinned to an exact release: v1.0.218 (Claude Code 2.1.265) ships a
+        # native installer that leaves no binary on ubuntu runners. Bump here
+        # after verifying a newer release on one repository.
+        uses: anthropics/claude-code-action@v1.0.217
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: --max-turns 60
