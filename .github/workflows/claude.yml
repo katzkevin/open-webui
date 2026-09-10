@@ -29,18 +29,27 @@ jobs:
       actions: read # Lets Claude read CI results on pull requests.
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        # Third-party actions are pinned by commit SHA (REQ-006). The trailing
+        # comment names the tag that SHA belongs to; change both together.
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 1
+          # checkout leaves the workflow token in the working tree's git config.
+          # The action strips it and re-points origin at its own App token before
+          # Claude runs, but that strip has to match checkout's private config
+          # layout, which changed once and silently no-opped. Nothing in this job
+          # needs the workflow token for git, so never persist it.
+          persist-credentials: false
 
       - name: Run Claude Code
         id: claude
         # No github_token input: the action authenticates as the Claude GitHub
         # App so that CI runs on the commits it pushes.
-        # Pinned to an exact release: v1.0.218 (Claude Code 2.1.265) ships a
-        # native installer that leaves no binary on ubuntu runners. Bump here
-        # after verifying a newer release on one repository.
-        uses: anthropics/claude-code-action@v1.0.217
+        #
+        # Held at release v1.0.217. The next release, v1.0.218, ships a native
+        # installer that leaves no binary on ubuntu runners (#18). Verify a newer
+        # release on one repository before bumping the SHA and its tag comment.
+        uses: anthropics/claude-code-action@9c5ddab2e6d17b83ea679153b31f1d5f023cf636 # v1.0.217
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: --max-turns 60
